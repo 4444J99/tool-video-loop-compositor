@@ -1,0 +1,9 @@
+node_modules/
+__pycache__/
+.pytest_cache/
+fixtures/generated/
+test-results/
+*.log
+data/
+media/
+still/

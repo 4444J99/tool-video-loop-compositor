@@ -69,13 +69,24 @@ process.stdout.write(JSON.stringify(diagnostics.samplerGaps([row(0, 0, [1]), row
 const {observe} = require(process.argv[1]);
 const page = {evaluate: async (fn, arg) => { await new Promise(r => setTimeout(r, 30)); return fn(arg); }};
 observe(page, arg => ({epochMs: Date.now(), arg}), 7).then(row => {
-  process.stdout.write(JSON.stringify({arg: row.arg, ordered: row.runner.sentAtMs <= row.epochMs && row.epochMs <= row.runner.returnedAtMs,
+  process.stdout.write(JSON.stringify({arg: row.arg, lag: row.runner.eventLoopLagMs, load: row.runner.loadAvg1, ordered: row.runner.sentAtMs <= row.epochMs && row.epochMs <= row.runner.returnedAtMs,
     spanMs: row.runner.returnedAtMs - row.runner.sentAtMs}));
 });
 ''', str(MODULE))
         self.assertEqual(out['arg'], 7)
         self.assertTrue(out['ordered'])
         self.assertGreaterEqual(out['spanMs'], 25)
+        self.assertIsInstance(out['lag'], (int, float))
+        self.assertGreaterEqual(out['lag'], 0)
+        self.assertIsInstance(out['load'], (int, float))
+
+    def test_a_blocked_observer_loop_is_measured_as_lag(self):
+        out = run(r'''
+const {observe} = require(process.argv[1]);
+const page = {evaluate: async fn => { const end = Date.now() + 400; while (Date.now() < end); return fn(); }};
+observe(page, () => ({epochMs: Date.now()})).then(row => process.stdout.write(JSON.stringify({lag: row.runner.eventLoopLagMs})));
+''', str(MODULE))
+        self.assertGreaterEqual(out['lag'], 300)
 
 
 class DecodeFreezeTests(unittest.TestCase):
@@ -93,6 +104,15 @@ process.stdout.write(JSON.stringify(diagnostics.decodeFreezes([...rows, ...froze
         self.assertGreaterEqual(window['durationMs'], 9000)
         self.assertEqual(window['seekingDecksAtOnset'], 1)
         self.assertGreater(window['simAdvancedMs'], 9000)
+
+    def test_runner_lag_and_load_over_a_freeze_window_are_carried(self):
+        out = run(ROWS + r'''
+const rows = [];
+for (let i = 0; i < 12; i++) { const r = row(i * 400, i * .4, [120, 120]); r.runner = {eventLoopLagMs: i === 5 ? 90 : 2, loadAvg1: 30 + i}; rows.push(r); }
+process.stdout.write(JSON.stringify(diagnostics.decodeFreezes(rows)));
+''', str(MODULE))
+        window = out['windows'][0]
+        self.assertEqual((window['maxEventLoopLagMs'], window['maxLoadAvg1']), (90, 41))
 
     def test_one_advancing_deck_or_a_paused_page_is_not_a_freeze(self):
         out = run(ROWS + r'''

@@ -8,15 +8,39 @@
 // decoded-frame counters stood still while the sampler stayed responsive. These helpers record the facts that separate
 // them. They never change a verdict; they make a red run attributable from its receipt alone.
 
+const os = require('node:os');
+
 const GAP_MS = 1000;
 const FREEZE_MS = 1500;
 
 // Runner-side stamps around one page.evaluate. Both clocks are Date.now() on the same host, so the row's own epochMs
 // (taken inside the page when the sample ran) splits the round trip into dispatch and return latency.
+// The monitor timer measures how late this process's own event loop runs, independent of the page. A late loop means
+// the runner was busy or starved (the host side of a gap); an on-time loop beside a stalled page points at the page.
+const MONITOR_MS = 50;
+let monitor = null, lastTick = 0, maxLagMs = 0;
+function startMonitor() {
+  if (monitor) return;
+  lastTick = Date.now();
+  monitor = setInterval(() => {
+    const now = Date.now();
+    maxLagMs = Math.max(maxLagMs, now - lastTick - MONITOR_MS);
+    lastTick = now;
+  }, MONITOR_MS);
+  monitor.unref();
+}
+
 async function observe(page, fn, arg) {
+  startMonitor();
   const sentAtMs = Date.now();
   const row = await page.evaluate(fn, arg);
-  if (row && typeof row === 'object') row.runner = {sentAtMs, returnedAtMs: Date.now()};
+  if (row && typeof row === 'object') {
+    // Date.now() here, not the monitor's last tick: a blocked loop has not ticked, so the lag so far is the larger of
+    // the recorded maximum and the time since the last tick.
+    const returnedAtMs = Date.now(), eventLoopLagMs = Math.max(maxLagMs, returnedAtMs - lastTick - MONITOR_MS, 0);
+    maxLagMs = 0;
+    row.runner = {sentAtMs, returnedAtMs, eventLoopLagMs, loadAvg1: Number(os.loadavg()[0].toFixed(2))};
+  }
   return row;
 }
 
@@ -48,6 +72,7 @@ function samplerGaps(rows, thresholdMs = GAP_MS) {
     gaps.push({fromWall: before.wall, toWall: after.wall, gapMs: Math.round(gapMs),
       dispatchMs: runner && Number.isFinite(after.epochMs) ? after.epochMs - runner.sentAtMs : null,
       returnMs: runner && Number.isFinite(after.epochMs) ? runner.returnedAtMs - after.epochMs : null,
+      eventLoopLagMs: runner?.eventLoopLagMs ?? null, loadAvg1: runner?.loadAvg1 ?? null,
       simAdvancedMs, callbackDelta, pageAlive: simAdvancedMs !== null && simAdvancedMs >= gapMs * .9 && callbackDelta > 0});
   }
   return {thresholdMs, count: gaps.length, maxGapMs: gaps.reduce((max, gap) => Math.max(max, gap.gapMs), 0),
@@ -64,7 +89,8 @@ function decodeFreezes(rows, thresholdMs = FREEZE_MS) {
   const close = () => {
     if (run && run.lastWall - run.firstWall >= thresholdMs) {
       windows.push({fromWall: run.firstWall, toWall: run.lastWall, durationMs: Math.round(run.lastWall - run.firstWall),
-        samples: run.samples, seekingDecksAtOnset: run.seeking, simAdvancedMs: Math.round((run.lastSim - run.firstSim) * 1000)});
+        samples: run.samples, seekingDecksAtOnset: run.seeking,
+        maxEventLoopLagMs: run.lagMs, maxLoadAvg1: run.load, simAdvancedMs: Math.round((run.lastSim - run.firstSim) * 1000)});
     }
     run = null;
   };
@@ -74,9 +100,12 @@ function decodeFreezes(rows, thresholdMs = FREEZE_MS) {
     const key = callbackTotal(row) + ':' + frameTotal(row);
     if (run && run.key === key) {
       run.lastWall = row.wall; run.lastSim = row.simTime; run.samples++;
+      if (row.runner) {
+        run.lagMs = Math.max(run.lagMs ?? 0, row.runner.eventLoopLagMs ?? 0); run.load = Math.max(run.load ?? 0, row.runner.loadAvg1 ?? 0);
+      }
     } else {
       close();
-      run = {key, firstWall: row.wall, lastWall: row.wall, firstSim: row.simTime, lastSim: row.simTime, samples: 1,
+      run = {key, firstWall: row.wall, lastWall: row.wall, firstSim: row.simTime, lastSim: row.simTime, samples: 1, lagMs: row.runner?.eventLoopLagMs ?? null, load: row.runner?.loadAvg1 ?? null,
         seeking: (row.decks || []).filter(deck => deck.populated && deck.seeking).length};
     }
   }

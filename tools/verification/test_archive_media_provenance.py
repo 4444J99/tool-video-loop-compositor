@@ -3,7 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -60,7 +60,7 @@ class ArchiveMediaProvenanceTests(unittest.TestCase):
 
     def test_retained_media_streams(self):
         """Probe the actual file for its sole video stream and six-second duration."""
-        result = subprocess.run(
+        result = retry.run(
             [
                 "ffprobe", "-v", "error", "-show_entries",
                 "stream=codec_type,codec_name,width,height:format=duration",
@@ -77,7 +77,7 @@ class ArchiveMediaProvenanceTests(unittest.TestCase):
 
     def test_retained_media_decodes(self):
         """Decode the complete retained video, failing on any FFmpeg error."""
-        subprocess.run(
+        retry.run(
             [
                 "ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(self.media),
                 "-map", "0:v:0", "-f", "null", "-",

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import posixpath
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
@@ -221,7 +221,7 @@ async function load(corrupt){
 })().catch(error=>{console.error(error);process.exitCode=1;});'''
         payload = {"script": REPLAY_JS, "plan": plan, "bytes": list(original),
                    "id": content_id, "hash": hashlib.sha256(original).hexdigest()}
-        result = subprocess.run(["node", "-e", harness], input=json.dumps(payload), text=True, capture_output=True, timeout=20)
+        result = retry.run(["node", "-e", harness], input=json.dumps(payload), text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node is unavailable for replay transport checks")
@@ -278,7 +278,7 @@ const label=()=>elements.get('#replay-status').textContent;
  await elements.get('#play').listeners.get('click')();refresh();
  assert.equal(engine.running,true);assert.equal(pauseCalls,3,'explicit Play must cancel the queued pause');
 })().catch(error=>{console.error(error);process.exitCode=1;});'''
-        result = subprocess.run(["node", "-e", harness], input=json.dumps({"script": REPLAY_JS, "nativePause": native_pause}),
+        result = retry.run(["node", "-e", harness], input=json.dumps({"script": REPLAY_JS, "nativePause": native_pause}),
                                 text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -304,9 +304,9 @@ for(const entry of input){
             if f"iterations/{item['slug']}/audio-plan.json" in self.files:
                 plans.append(self.plan(item["slug"], audio=True))
             entries.append({"source": self.files[f"iterations/{item['slug']}/runtime.js"].decode(), "plans": plans})
-        result = subprocess.run(["node", "-e", harness], input=json.dumps(entries), text=True, capture_output=True, timeout=20)
+        result = retry.run(["node", "-e", harness], input=json.dumps(entries), text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
-        syntax = subprocess.run(["node", "--check"], input=REPLAY_JS, text=True, capture_output=True, timeout=10)
+        syntax = retry.run(["node", "--check"], input=REPLAY_JS, text=True, capture_output=True, timeout=10)
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
 

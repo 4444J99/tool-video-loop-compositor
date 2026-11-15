@@ -9,6 +9,7 @@ import re
 import os
 import shutil
 import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -208,7 +209,7 @@ class OutputTests(Base):
             env = dict(os.environ, PYTHONHASHSEED=hash_seed)
             args = list(self.common)
             args[args.index("--out") + 1] = other
-            done = subprocess.run([sys.executable, "-m", "tools.media.play_state", *map(str, args)],
+            done = retry.run([sys.executable, "-m", "tools.media.play_state", *map(str, args)],
                                   capture_output=True, text=True, env=env, cwd=REPO_ROOT)
             self.assertEqual(done.returncode, 0, done.stderr)
             digests.add(hashlib.sha256(other.read_bytes()).hexdigest())

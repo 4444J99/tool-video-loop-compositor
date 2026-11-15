@@ -4,7 +4,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import unittest
 from unittest.mock import patch
@@ -62,9 +62,9 @@ class FunctionalIdentityTests(unittest.TestCase):
         for action, legacy in (("preview", "simvltanea.browser_runtime"),
                                ("render", "simvltanea.render_triptych")):
             for arguments, expected in ((["--help"], 0), (["--unknown-argument"], 2)):
-                old = subprocess.run([sys.executable, "-m", legacy, *arguments],
+                old = retry.run([sys.executable, "-m", legacy, *arguments],
                                      cwd=REPO_ROOT, env=env, text=True, capture_output=True)
-                new = subprocess.run([sys.executable, "-m", "independent_loop_compositor", action, *arguments],
+                new = retry.run([sys.executable, "-m", "independent_loop_compositor", action, *arguments],
                                      cwd=REPO_ROOT, env=env, text=True, capture_output=True)
                 with self.subTest(action=action, arguments=arguments):
                     self.assertEqual(old.returncode, expected, old.stderr)

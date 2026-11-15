@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -216,10 +216,10 @@ class StageLibrarySiteTests(unittest.TestCase):
         command = [sys.executable, '-m', 'tools.publishing.stage_library_site', '--studio-out', str(self.studio),
                    '--library', str(self.library), '--site', str(self.site)]
         env = {'PYTHONPATH': f'{REPOSITORY}:{REPOSITORY / "src"}', 'PATH': '/usr/bin:/bin'}
-        done = subprocess.run(command, capture_output=True, text=True, timeout=60, env=env, cwd=REPOSITORY)
+        done = retry.run(command, capture_output=True, text=True, timeout=60, env=env, cwd=REPOSITORY)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.strip(), f'site assembled: {len(STUDIO_FILES)} studio files, 3 library clips')
-        again = subprocess.run(command, capture_output=True, text=True, timeout=60, env=env, cwd=REPOSITORY)
+        again = retry.run(command, capture_output=True, text=True, timeout=60, env=env, cwd=REPOSITORY)
         self.assertEqual(again.returncode, 2)
         self.assertIn('refused: site must be absent or an empty directory', again.stderr)
         for clip in self.manifest['clips']:

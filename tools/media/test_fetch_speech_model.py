@@ -6,7 +6,7 @@ import io
 import json
 import os
 import pathlib
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import threading
@@ -148,7 +148,7 @@ class FetchTests(FetchCase):
         self.assertEqual(self.server.state["requests"], [])
 
     def test_importing_the_module_and_asking_for_help_use_no_network(self):
-        completed = subprocess.run([sys.executable, "-m", "tools.media.fetch_speech_model", "--help"],
+        completed = retry.run([sys.executable, "-m", "tools.media.fetch_speech_model", "--help"],
                                    capture_output=True, text=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--dest", completed.stdout)

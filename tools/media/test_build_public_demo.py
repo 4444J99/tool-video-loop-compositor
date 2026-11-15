@@ -10,7 +10,7 @@ import io
 import json
 import pathlib
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import tempfile
 import types
 import unittest
@@ -61,11 +61,11 @@ def make_clip(path: pathlib.Path, size="320x180", rotation=0, audio=True, secret
     if secret_metadata:
         command += ["-metadata", f"location={SECRET_PLACE}/", "-metadata", "creation_time=2020-02-02T02:02:02Z",
                     "-metadata", "com.apple.quicktime.make=SecretPhone", "-metadata:s:v:0", "handler_name=SecretName"]
-    subprocess.run([*command, str(staging)], check=True)
+    retry.run([*command, str(staging)], check=True)
     command = ["ffmpeg", "-v", "error", "-y"]
     if rotation:
         command += ["-display_rotation:v:0", str(rotation)]  # input option, FFmpeg 6.1 and later
-    subprocess.run([*command, "-i", str(staging), "-c", "copy", str(path)], check=True)
+    retry.run([*command, "-i", str(staging), "-c", "copy", str(path)], check=True)
     staging.unlink()
 
 
@@ -300,7 +300,7 @@ class BuildTests(unittest.TestCase):
         source = self.folder / "src.mov"
         make_clip(source, rotation=90)
         tagged = self.folder / "tagged.mp4"  # what a careless encode would give: metadata kept, audio kept, rotated
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source), "-c:v", "libx264", "-c:a", "aac",
+        retry.run(["ffmpeg", "-v", "error", "-y", "-i", str(source), "-c:v", "libx264", "-c:a", "aac",
                         "-movflags", "+faststart", str(tagged)], check=True)
         with self.assertRaises(demo.VerificationError):
             demo.verify_output(tagged, "keep")

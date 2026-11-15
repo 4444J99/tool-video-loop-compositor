@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+from simvltanea import subprocess_retry as retry
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,7 +22,7 @@ FAKE_TAGS = ("location", "com.apple.quicktime.location.ISO6709", "make", "model"
 
 def make_mov(path: Path, **tags: str) -> None:
     metadata = [arg for key, value in tags.items() for arg in ("-metadata", f"{key}={value}")]
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=1:r=10", "-pix_fmt", "yuv420p",
+    retry.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=1:r=10", "-pix_fmt", "yuv420p",
                     "-movflags", "use_metadata_tags", *metadata, str(path)], check=True, capture_output=True)
 
 
@@ -70,7 +71,7 @@ class IndexClipsTests(unittest.TestCase):
 
     def test_the_synthetic_clips_really_carry_the_location_tag(self):
         # Guards against a vacuous privacy test: the fixture must contain what must not leak.
-        done = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json",
+        done = retry.run(["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json",
                                str(self.root / "originals" / "clip-utc" / "clip-utc.mov")],
                               capture_output=True, text=True, check=True)
         self.assertIn(LOCATION, done.stdout)

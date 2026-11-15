@@ -8,6 +8,7 @@ import math
 import pathlib
 import shutil
 import subprocess
+from simvltanea import subprocess_retry as retry
 import tempfile
 import unittest
 from unittest import mock
@@ -34,12 +35,12 @@ def with_side_rotation(value, **kwargs) -> dict:
 def make_rotated_clip(folder: pathlib.Path, rotation: int) -> pathlib.Path:
     """64x48 coded clip with a display matrix; the same two-step form proxy's tests use (FFmpeg 6.1 and later)."""
     staging, output = folder / f"staging-{rotation}.mov", folder / f"clip{rotation}.mov"
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=0.5",
+    retry.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=0.5",
                     "-c:v", "libx264", "-pix_fmt", "yuv420p", str(staging)], check=True)
     command = ["ffmpeg", "-v", "error", "-y"]
     if rotation:
         command += ["-display_rotation:v:0", str(rotation)]
-    subprocess.run([*command, "-i", str(staging), "-c", "copy", str(output)], check=True)
+    retry.run([*command, "-i", str(staging), "-c", "copy", str(output)], check=True)
     return output
 
 

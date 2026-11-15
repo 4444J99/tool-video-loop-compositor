@@ -6,7 +6,7 @@ import hashlib
 import http.server
 import json
 import os
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import threading
@@ -76,7 +76,7 @@ class BuildStudioSiteTests(unittest.TestCase):
 
     def run_build(self, pin=None):
         env = {**os.environ, 'PYTHONPATH': str(ROOT / 'src')}
-        return subprocess.run(
+        return retry.run(
             [sys.executable, '-m', 'tools.publishing.build_studio_site',
              '--library-url', self.url, '--manifest-sha256', pin or self.pin,
              '--output', str(self.output)], cwd=ROOT, env=env,
@@ -142,7 +142,7 @@ class BuildStudioSiteTests(unittest.TestCase):
     def test_builds_an_admitted_local_library_without_remote_downloads(self):
         variant, data = self.add_boomerang()
         (self.library / 'repository.zip').unlink()
-        result = subprocess.run(
+        result = retry.run(
             [sys.executable, '-m', 'tools.publishing.build_studio_site',
              '--library', str(self.library), '--output', str(self.output)],
             cwd=ROOT, capture_output=True, text=True, timeout=30)

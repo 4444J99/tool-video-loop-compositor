@@ -147,6 +147,7 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
         self.settled(page)
         self.assertEqual(page.evaluate('decodeFailures'), 1, 'a failing asset must not be retried')
         self.assertEqual(self.deferrals(page), 0)
+        print('DBG', page.evaluate("compositionRuntime.events.map(e=>e.type+'@'+Math.round(e.wall||0))"))
         self.assertEqual(page.evaluate("compositionRuntime.events.filter(e=>e.type==='handoff-reattempt').length"), 0)
         self.assertEqual(self.loop_one_asset(page), boomerang)
 
@@ -209,6 +210,30 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
         self.assertEqual(self.loop_one_asset(page), boomerang,
                          'a newer intent owns the field; the stale re-attempt must not replace the retained variant')
         self.assertEqual(self.deferrals(page), 1)
+
+
+    def test_edit_that_restores_the_same_intent_still_supersedes_the_re_attempt(self):
+        """Cycling the family away and back is two edits that leave the intent
+        equal to the one the repair was scheduled for (the same state a refused
+        edit restores). The intent check alone cannot tell that apart from no
+        edit, so each user edit must itself cancel the pending repair."""
+        page = self.ready(site='settlement-variant')
+        boomerang = page.evaluate("compositionRuntime.nodes.get('loop-1').item.clip.variants.boomerang.id")
+        self.defer(page, 'loop-1')
+        self.tap(page, '#loop-mode')
+        self.wait_deferred(page)
+        page.evaluate('restoreSettlementFault()')
+        key = "(s=>[s.seed,s.family,s.selection.join()].join('|'))(SimvltaneaStudio.snapshot())"
+        before = page.evaluate(key)
+        for _ in range(2):
+            self.tap(page, '#families [aria-checked="true"]')
+            page.wait_for_timeout(400)
+        self.assertEqual(page.evaluate(key), before, 'the two edits must land on the same intent')
+        self.settled(page)
+        page.wait_for_timeout(12000)
+        self.settled(page)
+        self.assertEqual(page.evaluate("compositionRuntime.events.filter(e=>e.type==='handoff-reattempt').length"), 0)
+        self.assertEqual(self.loop_one_asset(page), boomerang)
 
 
 if __name__ == '__main__':

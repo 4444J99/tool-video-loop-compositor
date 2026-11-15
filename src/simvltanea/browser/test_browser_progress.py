@@ -1,6 +1,6 @@
 """Proof-only decoded-frame accounting; no synthetic media playback policy."""
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 LIVE = Path(__file__).with_name('browser.live.js')
@@ -8,7 +8,7 @@ LIVE = Path(__file__).with_name('browser.live.js')
 
 class FrameProgressTests(unittest.TestCase):
     def run_js(self, body):
-        result = subprocess.run(['node', '-e', "const assert=require('node:assert/strict');\n"
+        result = retry.run(['node', '-e', "const assert=require('node:assert/strict');\n"
                         "const {FrameProgress,Session}=require(process.argv[1]);\n" + body,
                         str(LIVE)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

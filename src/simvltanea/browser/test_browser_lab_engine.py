@@ -4,7 +4,7 @@ import io
 import json
 from pathlib import Path
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -44,7 +44,7 @@ const {{Engine, createVoiceGraph}} = require({json.dumps(str(ENGINE))});
 const canvas = {{width:640,height:360,getContext:()=>null}};
 {body}
 """
-        result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+        result = retry.run([NODE, "-e", script], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_sound_outlives_picture_and_sequence_skips_tail(self):
@@ -391,7 +391,7 @@ class LabEngineSignalTests(unittest.TestCase):
             self.page.add_script_tag(content=source.read_text())
 
     def native_fixture(self):
-        fixture=subprocess.run([
+        fixture=retry.run([
             shutil.which('ffmpeg'), '-hide_banner', '-loglevel', 'error',
             '-f', 'lavfi', '-i', 'testsrc2=size=64x48:rate=12',
             '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',

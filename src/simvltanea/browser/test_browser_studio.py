@@ -26,7 +26,7 @@ import math
 import os
 import re
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import threading
@@ -98,11 +98,11 @@ def tool(name: str) -> str:
 
 
 def ffmpeg(*arguments: str) -> None:
-    subprocess.run([tool('ffmpeg'), '-v', 'error', '-y', *arguments], check=True, timeout=300)
+    retry.run([tool('ffmpeg'), '-v', 'error', '-y', *arguments], check=True, timeout=300)
 
 
 def probe(path: Path) -> dict:
-    completed = subprocess.run(
+    completed = retry.run(
         [tool('ffprobe'), '-v', 'error', '-show_entries',
          'stream=codec_type,codec_name,codec_tag_string,profile,width,height,pix_fmt,color_range,'
          'avg_frame_rate,r_frame_rate,duration:stream_side_data=rotation:format=duration,format_name',
@@ -212,7 +212,7 @@ def prepare_library() -> dict:
 
 
 def node(script: str, payload) -> object:
-    completed = subprocess.run([tool('node'), '-e', script, str(STUDIO_JS)], input=json.dumps(payload),
+    completed = retry.run([tool('node'), '-e', script, str(STUDIO_JS)], input=json.dumps(payload),
                                capture_output=True, text=True, check=True, timeout=120)
     return json.loads(completed.stdout)
 
@@ -367,7 +367,7 @@ class StageStudioTests(unittest.TestCase):
         src = Path(__file__).resolve().parents[2]
         env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(src), str(src.parent)]))
         output = self.temp / 'cli'
-        completed = subprocess.run([sys.executable, '-m', 'simvltanea.browser.browser_studio', '--output', str(output)],
+        completed = retry.run([sys.executable, '-m', 'simvltanea.browser.browser_studio', '--output', str(output)],
                                    env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(sorted(path.name for path in output.iterdir()), sorted(STUDIO_FILES))

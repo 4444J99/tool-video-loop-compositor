@@ -8,6 +8,7 @@
 - [The lab](authoring/LAB.md): a playable, modular-synth-style instrument for many loops at once, with every parameter a live control
 - [Configurable layout](governance/LAYOUT.md)
 - [Structure](governance/STRUCTURE.md), [naming](governance/NAMING.md), [branches](governance/BRANCHES.md), and [status](governance/STATUS.md)
+- [Test child processes](governance/TEST_CHILD_PROCESSES.md): why tests run render, ffmpeg and node children through a retry helper
 - [Provenance](provenance/PROVENANCE.md) and [recovery](provenance/RECOVERY.md)
 - [Plans](plans/INDEX.md)
 - [Retained incubation records](../archive/incubation/README.md) and [archive manifest](../archive/PROJECT_MANIFEST.md)

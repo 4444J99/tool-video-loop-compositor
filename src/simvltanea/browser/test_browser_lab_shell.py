@@ -6,7 +6,7 @@ import io
 import json
 from pathlib import Path
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 import wave
 
@@ -118,7 +118,7 @@ class EffectsLabShellTests(unittest.TestCase):
 class EffectsLabUIContractTests(unittest.TestCase):
     def evaluate(self, expression):
         script = f"const ui=require({json.dumps(str(MODULE))}); const m=global.SimvltaneaLabModel; (async()=>{{console.log(JSON.stringify(await ({expression})));}})().catch(error=>{{console.error(error);process.exit(1);}});"
-        result = subprocess.run(['node', '-e', script], check=True, text=True, capture_output=True)
+        result = retry.run(['node', '-e', script], check=True, text=True, capture_output=True)
         return json.loads(result.stdout)
 
     def test_a_setting_edit_targets_one_voice_and_one_key(self):

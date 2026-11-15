@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -15,7 +15,7 @@ def execute(body: str):
     if not ENGINE.is_file():
         raise AssertionError('Studio ecological scheduler has not been implemented')
     program = "const {Engine, criticalSpring} = require(process.argv[1]);\n" + body
-    result = subprocess.run([shutil.which('node') or 'node', '-e', program, str(ENGINE)],
+    result = retry.run([shutil.which('node') or 'node', '-e', program, str(ENGINE)],
                             text=True, capture_output=True, timeout=30, check=True)
     return json.loads(result.stdout)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -173,7 +173,7 @@ parkRows.push({wall: 118200, nodes: [], decks: []});
 
 def classify(mutation: str = '') -> dict:
     program = FIXTURE + mutation + '\nprocess.stdout.write(JSON.stringify(analyse(result)));'
-    completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+    completed = retry.run(['node', '-e', program, str(VERIFIER)], check=True,
                                capture_output=True, text=True, timeout=15)
     return json.loads(completed.stdout)
 
@@ -183,7 +183,7 @@ def classify_resources(mutation: str) -> dict:
 const resourceErrors = require(process.argv[1]).classifyResourceErrors(result);
 process.stdout.write(JSON.stringify({pass: resourceErrors.unexpected.length === 0, resourceErrors}));
 '''
-    completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+    completed = retry.run(['node', '-e', program, str(VERIFIER)], check=True,
                                capture_output=True, text=True, timeout=15)
     return json.loads(completed.stdout)
 
@@ -199,7 +199,7 @@ const urls = [
 ];
 process.stdout.write(JSON.stringify(urls));
 '''
-        completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+        completed = retry.run(['node', '-e', program, str(VERIFIER)], check=True,
                                    capture_output=True, text=True, timeout=15)
         self.assertEqual(json.loads(completed.stdout), [
             'http://127.0.0.1:8456/watch.html?seed=7&mix=s0.1.2.3&evolve=0&proof=1',
@@ -673,7 +673,7 @@ assert.equal(result.samples, samples);
 assert.equal(JSON.stringify(result), before);
 process.stdout.write(JSON.stringify(summary));
 '''
-        completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+        completed = retry.run(['node', '-e', program, str(VERIFIER)], check=True,
                                    capture_output=True, text=True, timeout=15)
         summary = json.loads(completed.stdout)
         self.assertTrue(summary['pass'], summary)
@@ -765,7 +765,7 @@ const {proofJournal} = require(process.argv[1]);
   await assert.rejects(closeFailure.close(), /flush failed/);
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
-        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+        retry.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
 
     def test_dense_prelude_metadata_is_bounded_and_reconstructs_all_raw_evidence(self):
         program = r'''
@@ -799,7 +799,7 @@ assert.ok(Buffer.byteLength(JSON.stringify(legacy)) > 2 * 1024 * 1024);
   assert.deepEqual(preludeJournalMetadata(JSON.parse(before)), metadata);
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
-        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+        retry.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
 
     def test_prelude_metadata_rejects_unwitnessed_or_changed_source_rows(self):
         program = r'''
@@ -818,7 +818,7 @@ assert.throws(() => preludeJournalMetadata({...prelude, incomingObservations: []
 const ordinary = {samples: [{wall: 1}], before: {wall: 2}, after: {wall: 3}};
 assert.deepEqual(preludeJournalMetadata(ordinary), {samples: 1, before: {wall: 2}, after: {wall: 3}});
 '''
-        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+        retry.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
 
     def test_recorded_failure_after_completed_sampling_cannot_pass(self):
         self.assert_refused("result.failure = 'Screenshot failed after the browser closed';", 'noFailure')

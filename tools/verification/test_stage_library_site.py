@@ -216,7 +216,8 @@ class StageLibrarySiteTests(unittest.TestCase):
         command = [sys.executable, '-m', 'tools.publishing.stage_library_site', '--studio-out', str(self.studio),
                    '--library', str(self.library), '--site', str(self.site)]
         env = {'PYTHONPATH': f'{REPOSITORY}:{REPOSITORY / "src"}', 'PATH': '/usr/bin:/bin'}
-        done = retry.run(command, capture_output=True, text=True, timeout=60, env=env, cwd=REPOSITORY)
+        done = retry.run(command, capture_output=True, text=True, timeout=60, env=env, cwd=REPOSITORY,
+                         reset=lambda: shutil.rmtree(self.site, ignore_errors=True))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.strip(), f'site assembled: {len(STUDIO_FILES)} studio files, 3 library clips')
         again = retry.run(command, capture_output=True, text=True, timeout=60, env=env, cwd=REPOSITORY)

@@ -114,6 +114,38 @@ class SubprocessRetryTests(unittest.TestCase):
             done = retry.run([sys.executable, '-c', KILLED_ONCE, str(Path(directory) / 'ran')], check=True, capture_output=True, text=True)
             self.assertEqual(done.stdout.strip(), 'verdict')
 
+    def test_reset_runs_before_each_rerun_and_never_before_the_first_attempt(self):
+        codes = [-signal.SIGTERM, -signal.SIGTERM, 0]
+        events = []
+
+        def runner(command, **kwargs):
+            events.append('run')
+            return SimpleNamespace(returncode=codes.pop(0), stderr='')
+
+        done = retry.run(['x'], attempts=3, runner=runner, reset=lambda: events.append('reset'))
+        self.assertEqual((done.returncode, events), (0, ['run', 'reset', 'run', 'reset', 'run']))
+
+    def test_a_mutating_child_that_refuses_existing_output_is_rerun_clean_after_sigterm(self):
+        child = (
+            "import os, signal, sys\n"
+            "out, mark = sys.argv[1], sys.argv[2]\n"
+            "if os.path.exists(out):\n"
+            "    sys.exit(2)\n"
+            "open(out, 'w').write('partial')\n"
+            "if not os.path.exists(mark):\n"
+            "    open(mark, 'w').close()\n"
+            "    os.kill(os.getpid(), signal.SIGTERM)\n"
+            "sys.exit(0)\n")
+        with tempfile.TemporaryDirectory() as directory:
+            out, mark = Path(directory) / 'out', str(Path(directory) / 'mark')
+            command = [sys.executable, '-c', child, str(out), mark]
+            stuck = retry.run(command, capture_output=True, text=True)
+            self.assertEqual(stuck.returncode, 2)
+            out.unlink()
+            Path(mark).unlink()
+            done = retry.run(command, capture_output=True, text=True, reset=lambda: out.unlink(missing_ok=True))
+            self.assertEqual(done.returncode, 0)
+
     def test_attempts_below_one_are_refused(self):
         with self.assertRaises(ValueError):
             retry.run(['x'], attempts=0)

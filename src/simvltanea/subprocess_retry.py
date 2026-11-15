@@ -35,11 +35,17 @@ def _prefixed(text, note):
     return note + ('\n' + text if text else '')
 
 
-def run(command, *, attempts=DEFAULT_ATTEMPTS, runner=subprocess.run, **kwargs):
-    """subprocess.run, run again up to ``attempts`` times while the child dies of an outside SIGTERM."""
+def run(command, *, attempts=DEFAULT_ATTEMPTS, runner=subprocess.run, reset=None, **kwargs):
+    """subprocess.run, run again up to ``attempts`` times while the child dies of an outside SIGTERM.
+
+    ``reset`` is called (no arguments) before every re-run, never before the first attempt, so a child that
+    mutates its outputs (and refuses to start over existing ones) begins each re-run from a clean state.
+    """
     if attempts < 1:
         raise ValueError('attempts must be at least 1')
     for attempt in range(1, attempts + 1):
+        if attempt > 1 and reset is not None:
+            reset()
         try:
             completed = runner(command, **kwargs)
         except subprocess.CalledProcessError as error:

@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 import shutil
 import subprocess
+from simvltanea import subprocess_retry as retry
 import tempfile
 import unittest
 from unittest import mock
@@ -33,7 +34,7 @@ def source_clip(path, *, audio=True, short_audio=False, vfr=False):
     args += ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']
     if audio:
         args += ['-c:a', 'aac']
-    subprocess.run([*args, str(path)], check=True, capture_output=True)
+    retry.run([*args, str(path)], check=True, capture_output=True)
 
 
 def make_library(root, **options):
@@ -166,9 +167,10 @@ class MediaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / 'mono.mp4'
             source_clip(source)
-            decoded = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(source),
-                                               '-map', '0:a:0', '-af', 'atrim=duration=1',
-                                               '-ar', '48000', '-f', 'f32le', '-'])
+            decoded = retry.run(['ffmpeg', '-v', 'error', '-i', str(source),
+                                 '-map', '0:a:0', '-af', 'atrim=duration=1',
+                                 '-ar', '48000', '-f', 'f32le', '-'],
+                                check=True, stdout=subprocess.PIPE).stdout
             samples = array('f')
             samples.frombytes(decoded)
             expected = 20 * math.log10(max(abs(value) for value in samples))
@@ -181,14 +183,15 @@ class MediaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source, destination = root / 'numbered.mp4', root / 'boomerang.mp4'
-            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+            retry.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
                             "nullsrc=size=32x32:rate=30:duration=1,geq=lum='16+6*N':cb=128:cr=128",
                             '-c:v', 'libx264', '-crf', '0', str(source)], check=True, capture_output=True)
             loops.build_variant(source, destination, fade_frames=0)
             def levels(path):
-                return list(subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(path),
-                                                     '-map', '0:v:0', '-vf', 'scale=1:1,format=gray',
-                                                     '-f', 'rawvideo', '-']))
+                return list(retry.run(['ffmpeg', '-v', 'error', '-i', str(path),
+                                       '-map', '0:v:0', '-vf', 'scale=1:1,format=gray',
+                                       '-f', 'rawvideo', '-'],
+                                      check=True, stdout=subprocess.PIPE).stdout)
             forward, actual = levels(source), levels(destination)
             indices = [min(range(len(forward)), key=lambda i: abs(forward[i] - level)) for level in actual]
             self.assertEqual(indices, list(range(30)) + list(range(28, 0, -1)))

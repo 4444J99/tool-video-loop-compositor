@@ -35,7 +35,3 @@ and on a `-m` module run by a python executable, anywhere in the call, so a chil
 mention one of them can be flagged. A call whose program is `git`, `swift` or `rm` is never flagged, and
 `python -c` snippets are not covered. The helper has no `check_output` equivalent:
 write `retry.run(command, check=True, stdout=subprocess.PIPE).stdout`.
-
-The test keeps a `PENDING` list of files whose calls are not converted yet. A file outside the list
-may not hold a bare call, and a file on the list that no longer holds one fails until it is removed,
-so the list only shrinks.

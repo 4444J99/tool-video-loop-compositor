@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -28,7 +28,7 @@ def make_state(workspace: Path, real_media: bool) -> Path:
     for index in range(2):
         clip = workspace / "media" / f"loop-{index + 1}.mp4"
         if real_media:
-            subprocess.run(
+            retry.run(
                 ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
                  "testsrc2=s=160x160:r=24:d=3", "-vf", f"hue=h={index * 90}", "-c:v", "libx264",
                  "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-an", str(clip)], check=True)
@@ -64,7 +64,7 @@ class CommandLineTests(unittest.TestCase):
         if debug:
             env[DEBUG] = "1"
         env.update(extra_env or {})
-        return subprocess.run([sys.executable, "-m", "independent_loop_compositor", *arguments],
+        return retry.run([sys.executable, "-m", "independent_loop_compositor", *arguments],
                               cwd=self.workspace, env=env, text=True, capture_output=True, timeout=300)
 
     def assertFriendly(self, result, *fragments):

@@ -13,7 +13,7 @@ import os
 import pathlib
 import re
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -66,12 +66,12 @@ def tag_record(uuid: str, verdict="clear", schema=builder.SCHEMA_ID, analysis=Tr
 
 
 def ffmpeg(*arguments: str) -> None:
-    subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *arguments],
+    retry.run(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *arguments],
                    check=True, capture_output=True)
 
 
 def ffprobe_json(path: pathlib.Path) -> dict:
-    out = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
+    out = retry.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
                          check=True, capture_output=True, text=True).stdout
     return json.loads(out)
 
@@ -393,7 +393,7 @@ class PrerequisiteTests(DatasetCase):
         self.assertEqual((args.root, args.dest), (pathlib.Path("/r"), pathlib.Path("/d")))
 
     def test_help_needs_nothing_installed(self):
-        completed = subprocess.run([sys.executable, "-m", "tools.media.build_lab_dataset", "--help"],
+        completed = retry.run([sys.executable, "-m", "tools.media.build_lab_dataset", "--help"],
                                    capture_output=True, text=True,
                                    env={"PATH": "/nonexistent", "PYTHONPATH": os.pathsep.join(sys.path)},
                                    cwd=pathlib.Path(__file__).resolve().parents[2])

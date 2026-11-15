@@ -9,6 +9,7 @@ import contextlib
 import io
 import json
 import subprocess
+from simvltanea import subprocess_retry as retry
 import tempfile
 import unittest
 from pathlib import Path
@@ -110,7 +111,7 @@ class ReviewProofTests(unittest.TestCase):
         self.assertEqual(receipt['skipped'], 1)
 
     def test_real_child_process_rejects_empty_selection(self):
-        completed = subprocess.run([proof.sys.executable, '-m', 'tools.verification.run_review_proof',
+        completed = retry.run([proof.sys.executable, '-m', 'tools.verification.run_review_proof',
                                     '--child', str(self.receipt)], capture_output=True, text=True, timeout=10)
         self.assertEqual(completed.returncode, 1)
         self.assertEqual(json.loads(self.receipt.read_text())['status'], 'failed')

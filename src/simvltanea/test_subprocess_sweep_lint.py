@@ -2,10 +2,7 @@
 
 A child killed by an outside SIGTERM says nothing about the code under test, so every test that spawns one
 goes through ``simvltanea.subprocess_retry.run``. The sender of that signal is unconfirmed (see
-``docs/governance/TEST_CHILD_PROCESSES.md``), which is why the retry sits at each call site and not in a fixture.
-
-``PENDING`` is the ratchet for call sites not converted yet: a file listed there may still hold bare calls, a file
-not listed may not, and a listed file that no longer holds any must be removed from the list.
+``docs/governance/TEST_CHILD_PROCESSES.md``).
 """
 from __future__ import annotations
 
@@ -26,26 +23,6 @@ CHILD = re.compile(r'ffmpeg|ffprobe|\bnode\b|\bNODE\b|node_executable|render', r
 OTHER_PROGRAMS = {'git', 'swift', 'rm'}
 PYTHON = re.compile(r'executable|python')
 MODULE = re.compile(r"['\"]-m['\"]")
-
-PENDING: set[str] = {
-    'tools/editions/test_inaugural_fixture.py',
-    'tools/media/test_build_boomerangs.py',
-    'tools/media/test_build_lab_dataset.py',
-    'tools/media/test_build_public_demo.py',
-    'tools/media/test_fetch_speech_model.py',
-    'tools/media/test_index_clips.py',
-    'tools/media/test_play_state.py',
-    'tools/media/test_screen_audio.py',
-    'tools/media/test_tag_clips.py',
-    'tools/media/test_video_geometry.py',
-    'tools/verification/test_archive_media_provenance.py',
-    'tools/verification/test_build_studio_site.py',
-    'tools/verification/test_cli_doctor.py',
-    'tools/verification/test_functional_identity.py',
-    'tools/verification/test_iteration_replays.py',
-    'tools/verification/test_review_proof.py',
-    'tools/verification/test_stage_library_site.py',
-}
 
 
 def is_test_file(path: Path) -> bool:
@@ -211,16 +188,9 @@ class DetectorTests(unittest.TestCase):
 
 
 class SweepTests(unittest.TestCase):
-    def test_no_new_bare_child_in_tests(self):
-        found = scan()
-        fresh = {path: lines for path, lines in found.items() if path not in PENDING}
-        self.assertEqual(fresh, {}, 'spawn render, ffmpeg and node children through simvltanea.subprocess_retry.run '
-                                    '(from simvltanea import subprocess_retry as retry; retry.run(...))')
-
-    def test_pending_lists_only_files_still_holding_bare_children(self):
-        found = scan()
-        stale = sorted(path for path in PENDING if path not in found)
-        self.assertEqual(stale, [], 'converted already: remove these files from PENDING')
+    def test_no_bare_child_in_tests(self):
+        self.assertEqual(scan(), {}, 'spawn render, ffmpeg and node children through simvltanea.subprocess_retry.run '
+                                     '(from simvltanea import subprocess_retry as retry; retry.run(...))')
 
 
 if __name__ == '__main__':

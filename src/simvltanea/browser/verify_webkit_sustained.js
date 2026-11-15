@@ -11,6 +11,7 @@ const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {once} = require('node:events');
 const {silentLaunch} = require('./silent_browser.js');
+const {observe, samplerGaps, decodeFreezes} = require('./webkit_sampler_diagnostics.js');
 const DURATION_MS = 180000, SAMPLE_MS = 137, MAX_HOLD_MS = 2000;
 // A hosted macOS runner can stall a native decoder for 2 to 3 s once or twice in a 3 minute run and
 // then recover. The running maximum a hold leaves behind must not condemn the whole run: a hold of at
@@ -561,7 +562,11 @@ function analyse(result) {
     maxPopulatedDecks: populated, maxPlayingDecks: playing, maxPreparationLeases: standbys,
     restingSamples, maxResting, restingPaused, longestRestingJointHoldMs: restingJointMs,
     longestRestingDecodedHoldMs: restingDecodedMs, runtimeFailures: [...runtimeFailures],
-    unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors, resourceErrors};
+    unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors, resourceErrors,
+    // Non-gating attribution of stalls to the page or to the host observer; see webkit_sampler_diagnostics.js.
+    diagnostics: {
+      samplerGaps: samplerGaps(result.samples), decodeFreezes: decodeFreezes(result.samples),
+      prelude: {samplerGaps: samplerGaps(result.prelude?.samples), decodeFreezes: decodeFreezes(result.prelude?.samples)}}};
 }
 
 function staticServer(site, manifestOverride = null) {
@@ -644,7 +649,7 @@ function sampleControls(page, result) {
     while (running) {
       try {
         const includeTrace = performance.now() >= nextTrace;
-        result.samples.push(await page.evaluate(sample, includeTrace));
+        result.samples.push(await observe(page, sample, includeTrace));
         if (includeTrace) nextTrace = performance.now() + 1000;
       } catch (error) { result.errors.push('Control metadata sampling failed: ' + error); break; }
       await pause(SAMPLE_MS);
@@ -736,7 +741,7 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
     const began = performance.now(); let nextCoarse = 0, nextReport = 20000;
     while (performance.now() - began < DURATION_MS) {
       const includeTrace = performance.now() - began >= nextCoarse;
-      const row = await page.evaluate(sample, includeTrace); result.samples.push(row);
+      const row = await observe(page, sample, includeTrace); result.samples.push(row);
       await journal.append('sample', row); await journalErrors();
       const elapsed = performance.now() - began;
       if (elapsed >= nextCoarse) {
@@ -751,7 +756,7 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
       await pause(SAMPLE_MS);
     }
     result.elapsedMs = performance.now() - began;
-    const finalSample = await page.evaluate(sample, true); result.samples.push(finalSample);
+    const finalSample = await observe(page, sample, true); result.samples.push(finalSample);
     await journal.append('sample', finalSample);
     result.events = await page.evaluate(() => compositionRuntime.events);
     await journal.append('events', result.events);

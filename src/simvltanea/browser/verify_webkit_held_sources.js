@@ -2,6 +2,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const {libraryClips} = require('./browser.studio.js');
+const {observe} = require('./webkit_sampler_diagnostics.js');
 const TARGETS = Object.freeze([
   {id: '107936da1aae', role: 'held', sha256: '114d579e74bce64d59232b017a29584c5c6226d33e73f1965208bb7027ccce65',
     forwardSha256: '107936da1aae2c87657072e72487b74c3ec15e647304a3e974bc10b93d015b5d'},
@@ -176,7 +177,7 @@ async function prepare(page, {sample, click, ready, pause, journal}, targets = T
   Object.assign(result, {scope: 'Controlled four-active source/transition replay; manual mix suppresses sparse resting. '
     + 'This does not reproduce original wall timing, deck ages or ecological history.', origin: ORIGIN, samples: []});
   const capture = async () => {
-    const row = await page.evaluate(sample, true); result.samples.push(row);
+    const row = await observe(page, sample, true); result.samples.push(row);
     await journal.append('diagnostic-prelude-sample', row); return row;
   };
   const waitForSources = async selected => {

@@ -162,8 +162,8 @@ def _blank_comments(source: str) -> str:
         if c == '`':
             frames.append(['tmpl', 0]); out.append(c); i += 1
             continue
-        postfix = source[max(0, i - 8):i].rstrip()[-2:] in ('++', '--') and prev in '+-'
-        if c == '/' and not postfix and (prev == '' or prev in REGEX_AFTER or prev_word in REGEX_AFTER_WORDS):
+        if c == '/' and not re.search(r'(\+\+|--)\s*$', source[max(0, i - 64):i]) and (
+                prev == '' or prev in REGEX_AFTER or prev_word in REGEX_AFTER_WORDS):
             j = _regex_end(source, i)
             out.append(source[i:j]); i = j; prev = ')'; prev_word = ''
             continue
@@ -173,11 +173,13 @@ def _blank_comments(source: str) -> str:
             if frames[-1][1] == 0 and len(frames) > 1:
                 frames.pop(); out.append(c); i += 1; prev = ')'; prev_word = ''
                 continue
-            frames[-1][1] -= 1
+            frames[-1][1] = max(0, frames[-1][1] - 1)
         out.append(c); i += 1
         if not c.isspace():
             if c.isalnum() or c in '_$':
-                prev_word = (prev_word + c) if (prev.isalnum() or prev in '_$') else c
+                before = source[i - 2] if i >= 2 else ''
+                # a word continues only when the character right before it is a word character; a member name is not a keyword
+                prev_word = prev_word + c if before.isalnum() or before in ('_', '$') else ('.' + c if before == '.' else c)
             else:
                 prev_word = ''
             prev = c
@@ -259,6 +261,9 @@ class SilentLaunchLintTests(unittest.TestCase):
         # Division is not a regex: after a postfix operator, a string, a template and a closed expression.
         self.assertEqual(node_launches('x = `${ i++ / 2 } a ${ j / 3 }`; // webkit.launch()\nwebkit.launch();\n'), [2])
         self.assertEqual(node_launches('return "a" / 2; // webkit.launch()\nwebkit.launch();\n'), [2])
+        self.assertEqual(node_launches('x = i++        / 2; // webkit.launch()\nwebkit.launch();\n'), [2])
+        self.assertEqual(node_launches('const half = cfg.of / 2; const u = "a"; // webkit.launch()\nwebkit.launch();\n'), [2])
+        self.assertEqual(node_launches('else return /"/.test(s); await webkit.launch();\n'), [1])
         self.assertEqual(node_launches('x = `x` / 2; // webkit.launch()\nwebkit.launch();\n'), [2])
         self.assertEqual(node_launches('x = /a\\\n/; // webkit.launch()\nwebkit.launch();\n'), [3])
         self.assertEqual(node_launches('const s = "a\\" // b"; await webkit.launch();\n'), [1])

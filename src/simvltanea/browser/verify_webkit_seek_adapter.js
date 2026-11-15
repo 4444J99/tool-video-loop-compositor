@@ -139,6 +139,47 @@ function overlapSnapshot() {
     phase: node.phase, incoming: native(node, incoming), slotsStable, peersStable, logicalPeersStable};
 }
 
+// The standby decodes unpaused only for the length of one crossfade. Polling that window across the protocol
+// (evaluate round trip, journalling, a 137 ms pause) can see fewer than the three observations the overlap proof
+// needs when the runner is slow, which is a sampling race and not a property of the product. Record inside the page
+// instead, where the cadence does not depend on the host: only rows whose incoming deck is the pinned target and is
+// unpaused are kept, so the buffer is bounded by the crossfade, not by the setup time.
+const OVERLAP_RECORDER_MS = 25, OVERLAP_RECORDER_MAX_ROWS = 400;
+function installOverlapRecorder() {
+  return new Function('target', `
+    const snapshot = (${overlapSnapshot.toString()});
+    const state = globalThis.__overlapRecorder = {rows: [], timer: null};
+    state.timer = setInterval(() => {
+      const row = snapshot(), incoming = row?.incoming;
+      if (!incoming || incoming.paused !== false || incoming.item !== target.id || incoming.sha !== target.sha256 ||
+          state.rows.length >= ${OVERLAP_RECORDER_MAX_ROWS}) return;
+      state.rows.push(row);
+    }, ${OVERLAP_RECORDER_MS});
+  `);
+}
+function collectOverlapRecorder() {
+  const state = globalThis.__overlapRecorder;
+  if (!state) return [];
+  clearInterval(state.timer); globalThis.__overlapRecorder = null;
+  return state.rows;
+}
+// Rows are the union of the protocol poll and the in-page recorder, in strictly increasing wall order.
+function mergeRows(polled, recorded) {
+  const rows = [...polled, ...recorded].sort((a, b) => a.wall - b.wall), merged = [];
+  for (const row of rows) if (!merged.length || row.wall > merged.at(-1).wall) merged.push(row);
+  return merged;
+}
+// One definition of "the standby is decoding concurrently with the target" shared by both capture paths.
+function qualifiesAsOverlap(row, target, residentId, pairedTargetId) {
+  const incoming = row.incoming, p = incoming.progress;
+  return Boolean(['READY', 'CROSSFADING'].includes(row.phase) && p?.sourceChanges >= 2 &&
+    Number.isFinite(incoming.decoded) && incoming.ready >= 1 && incoming.ready <= 4 &&
+    !incoming.paused && incoming.src === incoming.currentSrc &&
+    incoming.item === target.id && incoming.sha === target.sha256 &&
+    row.nodes.some(node => node.id === 'loop-3' && node.item === residentId) &&
+    row.nodes.some(node => node.id === 'loop-4' && node.item === pairedTargetId));
+}
+
 async function prepare(page, {sample, pause, journal}, targets, result = {}, options) {
   Object.assign(result, {scope: 'Pinned six-source native reconcile replay in Hold. Initial A/B/C/predecessor; '
     + 'replace predecessor with target, then C with incoming sibling. This controls source identity and transition order, '
@@ -182,27 +223,31 @@ async function prepare(page, {sample, pause, journal}, targets, result = {}, opt
     await page.evaluate(rememberSlots);
     let done = false, succeeded = false, failure;
     const began = performance.now();
+    if (overlap) await page.evaluate(installOverlapRecorder(), target);
     const pending = page.evaluate(replacePinned, target).then(value => {succeeded = value;}, error => {failure = error;})
       .finally(() => {done = true;});
-    while (!done && performance.now() - began < 30000) {
-      if (overlap) {
-        const captured = await page.evaluate(sampleWithOverlap);
-        await recordSample(captured.row);
-        const row = captured.overlap;
-        if (row) {
-          result.incomingObservations.push(row); await journal.append('diagnostic-sibling-incoming', row);
-          const incoming = row.incoming, p = incoming.progress;
-          if (['READY', 'CROSSFADING'].includes(row.phase) && p?.sourceChanges >= 2 &&
-              Number.isFinite(incoming.decoded) && incoming.ready >= 1 && incoming.ready <= 4 &&
-              !incoming.paused && incoming.src === incoming.currentSrc &&
-              incoming.item === target.id && incoming.sha === target.sha256 &&
-              row.nodes.some(node => node.id === 'loop-3' && node.item === byRole('sibling-resident').id) &&
-              row.nodes.some(node => node.id === 'loop-4' && node.item === byRole('target').id)) {
-            result.siblingOverlap.push(row);
+    const qualifies = row => qualifiesAsOverlap(row, target, byRole('sibling-resident').id, byRole('target').id);
+    let recorded = [];
+    try {
+      while (!done && performance.now() - began < 30000) {
+        if (overlap) {
+          const captured = await page.evaluate(sampleWithOverlap);
+          await recordSample(captured.row);
+          const row = captured.overlap;
+          if (row) {
+            result.incomingObservations.push(row); await journal.append('diagnostic-sibling-incoming', row);
+            if (qualifies(row)) result.siblingOverlap.push(row);
           }
-        }
-      } else await capture();
-      await pause(137);
+        } else await capture();
+        await pause(137);
+      }
+    } finally {
+      if (overlap) recorded = await page.evaluate(collectOverlapRecorder).catch(() => []);
+    }
+    if (recorded.length) {
+      for (const row of recorded) await journal.append('diagnostic-sibling-incoming', row);
+      result.incomingObservations = mergeRows(result.incomingObservations, recorded);
+      result.siblingOverlap = mergeRows(result.siblingOverlap, recorded.filter(qualifies));
     }
     assert(done, 'Controlled reconciliation exceeded setup deadline');
     await pending; if (failure) throw failure;
@@ -281,4 +326,5 @@ function interventions(result, targets) {
 }
 
 module.exports = {installStrategy, strategySnapshot, initialize, admitPinned, rememberSlots, isolation,
-  replacePinned, overlapSnapshot, prepare, finalize, interventions};
+  replacePinned, overlapSnapshot, installOverlapRecorder, collectOverlapRecorder, mergeRows, qualifiesAsOverlap,
+  prepare, finalize, interventions};

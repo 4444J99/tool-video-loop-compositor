@@ -11,6 +11,7 @@ const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {once} = require('node:events');
 const {silentLaunch} = require('./silent_browser.js');
+const {observe, samplerGaps, decodeFreezes, pageAliveAcross} = require('./webkit_sampler_diagnostics.js');
 const DURATION_MS = 180000, SAMPLE_MS = 137, MAX_HOLD_MS = 2000;
 // A hosted macOS runner can stall a native decoder for 2 to 3 s once or twice in a 3 minute run and
 // then recover. The running maximum a hold leaves behind must not condemn the whole run: a hold of at
@@ -179,7 +180,11 @@ function admittedPreparation(result, error, expectedRetirements) {
     state.progress.maxGapMs === 0 && state.progress.currentGapMs === 0;
   const parked = state => hidden(state) && state.node.phase === 'READY' && state.deck.paused === true &&
     state.deck.seeking === false && state.deck.ready >= 3 && state.deck.currentSrc === url &&
-    state.progress.sourceChanges >= 1;
+    Number.isSafeInteger(state.progress.sourceChanges) && state.progress.sourceChanges >= 0;
+  // A parked standby need not have presented a frame yet: macOS WebKit parks READY (ready 4, paused) with zero frame
+  // callbacks (local runs, loops 2 and 4, fresh/seeded phases). The admission proof does not rest on a frame before the
+  // park; it rests on what follows, which stays required: unchanged park state, resumption, two distinct decoded
+  // frames owned by this deck before it becomes visible, and promotion to the same source epoch.
   const prior = context(before), initial = context(after);
   if (!hidden(prior) || !['PRIMING', 'READY'].includes(prior.node.phase) || !parked(initial) ||
       (prior.deck.currentSrc !== url && !(prior.node.phase === 'PRIMING' &&
@@ -237,8 +242,22 @@ function admittedPreparation(result, error, expectedRetirements) {
   const firstFrame = points[0], secondFrame = points.find(frame => firstFrame && frame.wall > firstFrame.wall &&
     frame.changes > firstFrame.changes && frame.decoded !== firstFrame.decoded);
   if (!secondFrame) return null;
+  // The two decoded frames and the visibility boundary above are already proven with continuous rows. From here only
+  // promotion to the same epoch remains. One observer-side gap may be bridged, never a page-side one: the host sampler
+  // was delayed 2068 ms in a hosted run while the page's clock and this deck's frame callbacks advanced throughout
+  // (run 43732681195, seek-cohort-control). The row after the gap must still show the same identity, epoch and
+  // foreground start, so a swapped source cannot be admitted. A second gap, or a gap in which the page did not
+  // demonstrably run, returns null as before.
+  let bridged = false;
   for (let index = visibleIndex; index < rows.length; index++) {
-    if (index > visibleIndex && (rows[index].wall <= rows[index - 1].wall || rows[index].wall - rows[index - 1].wall > 1000)) return null;
+    if (index > visibleIndex) {
+      const gap = rows[index].wall - rows[index - 1].wall;
+      if (rows[index].wall <= rows[index - 1].wall) return null;
+      if (gap > 1000) {
+        if (bridged || gap > OBSERVER_GAP_BRIDGE_MS || !pageAliveAcross(rows[index - 1], rows[index], identity)) return null;
+        bridged = true;
+      }
+    }
     const state = context(rows[index]);
     if (!state || state.deck.paused || state.deck.seeking || state.deck.currentSrc !== url || state.deck.ready < 3 ||
         state.progress.foregroundSince !== foregroundAt || !validProgress(state.progress, state.row.wall, true)) return null;
@@ -254,12 +273,15 @@ function admittedPreparation(result, error, expectedRetirements) {
   return null;
 }
 
+const TEARDOWN_YOUNG_MS = 5000;
+const OBSERVER_GAP_BRIDGE_MS = 5000;
 function classifyResourceErrors(result) {
   // Prelude reads belong to the same document and native source lifetimes.
   // Include them only in resource evidence, never in sustained timing/progress.
   const observations = [...(result.prelude?.samples || []), ...(result.samples || [])];
   const evidence = {...result, samples: observations};
-  const classified = {expectedRetirements: [], expectedAborts: [], recoveredReads: [], admittedPreparations: [], unexpected: []};
+  const classified = {expectedRetirements: [], expectedAborts: [], expectedTeardown: [], recoveredReads: [],
+    admittedPreparations: [], unexpected: []};
   const nativeBlobError = /^The operation couldn[’']t be completed\. \(WebKitBlobResource error 1\.\)$/;
   for (const kind of ['consoleErrors', 'requestFailures']) {
     for (const [index, error] of (result[kind] || []).entries()) {
@@ -292,6 +314,33 @@ function classifyResourceErrors(result) {
       if (retired) {
         classified.expectedRetirements.push({...reference, role: retired.role, id: retired.id,
           retiredAt: retired.wall, lagMs: wall - retired.wall});
+        continue;
+      }
+      // browser.close() cancels every read still in flight. A cancelled read stamped in the closing phase, after the
+      // final observation, for a source that observation shows populated on a non-active deck still loading (ready 2 or below) and never retired, is the
+      // harness tearing the document down, not playback failing. A closing-phase failure with no such positive
+      // ownership evidence (another URL, a retired URL, an unobserved URL, an earlier phase) stays unexpected.
+      // The read must also be young: assigned no earlier than TEARDOWN_YOUNG_MS before the final observation (bounded by the preceding observation). A standby stuck at
+      // ready 0 for longer than that is a hung load, a playback fault that close() merely exposes.
+      const finalRow = result.samples?.at(-1);
+      // Hidden-standby evidence is required, not merely !active: during a crossfade the visible incoming deck already
+      // carries weight and foreground progress while node.active has not flipped. A cancelled read on that deck is a
+      // playback fault, not a close() artefact.
+      const hiddenStandby = deck => deck.weight === 0 && deck.progress?.foreground !== true &&
+        deck.progress?.foregroundSince == null;
+      // (A populated deck without schema-1 progress already fails observation coverage, so absence here is not a bypass.)
+      const final = finalRow?.decks?.find(deck => deck.populated && !deck.active && deck.src === url && hiddenStandby(deck));
+      // Bound the load age from above with the observation PRECEDING the first row that shows the URL: the assignment
+      // happened after that row, whereas the first row showing it can be delayed by evaluate latency. No preceding
+      // observation means no bound, so fail closed.
+      const firstSeenAt = final ? observations.findIndex(row => (row.decks || []).some(deck =>
+        deck.src === url && deck.id === final.id && deck.deck === final.deck)) : -1;
+      const assignedAfter = firstSeenAt > 0 ? observations[firstSeenAt - 1]?.wall : undefined;
+      if (blob && cancelled && error.phase === 'closing' && error.method === 'GET' && error.resourceType === 'other' &&
+          finalRow && final && final.ready <= 2 && wall >= finalRow.wall && wall - finalRow.wall <= TEARDOWN_YOUNG_MS &&
+          Number.isFinite(assignedAfter) && finalRow.wall - assignedAfter <= TEARDOWN_YOUNG_MS &&
+          !(result.events || []).some(event => event?.type === 'resource-retired' && event.url === url)) {
+        classified.expectedTeardown.push({...reference, finalObservedAt: finalRow.wall, lagMs: wall - finalRow.wall});
         continue;
       }
       // A cancelled internal read can coexist with successful decoding. Require
@@ -538,7 +587,11 @@ function analyse(result) {
     maxPopulatedDecks: populated, maxPlayingDecks: playing, maxPreparationLeases: standbys,
     restingSamples, maxResting, restingPaused, longestRestingJointHoldMs: restingJointMs,
     longestRestingDecodedHoldMs: restingDecodedMs, runtimeFailures: [...runtimeFailures],
-    unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors, resourceErrors};
+    unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors, resourceErrors,
+    // Non-gating attribution of stalls to the page or to the host observer; see webkit_sampler_diagnostics.js.
+    diagnostics: {
+      samplerGaps: samplerGaps(result.samples), decodeFreezes: decodeFreezes(result.samples),
+      prelude: {samplerGaps: samplerGaps(result.prelude?.samples), decodeFreezes: decodeFreezes(result.prelude?.samples)}}};
 }
 
 function staticServer(site, manifestOverride = null) {
@@ -621,7 +674,7 @@ function sampleControls(page, result) {
     while (running) {
       try {
         const includeTrace = performance.now() >= nextTrace;
-        result.samples.push(await page.evaluate(sample, includeTrace));
+        result.samples.push(await observe(page, sample, includeTrace));
         if (includeTrace) nextTrace = performance.now() + 1000;
       } catch (error) { result.errors.push('Control metadata sampling failed: ' + error); break; }
       await pause(SAMPLE_MS);
@@ -713,7 +766,7 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
     const began = performance.now(); let nextCoarse = 0, nextReport = 20000;
     while (performance.now() - began < DURATION_MS) {
       const includeTrace = performance.now() - began >= nextCoarse;
-      const row = await page.evaluate(sample, includeTrace); result.samples.push(row);
+      const row = await observe(page, sample, includeTrace); result.samples.push(row);
       await journal.append('sample', row); await journalErrors();
       const elapsed = performance.now() - began;
       if (elapsed >= nextCoarse) {
@@ -728,7 +781,7 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
       await pause(SAMPLE_MS);
     }
     result.elapsedMs = performance.now() - began;
-    const finalSample = await page.evaluate(sample, true); result.samples.push(finalSample);
+    const finalSample = await observe(page, sample, true); result.samples.push(finalSample);
     await journal.append('sample', finalSample);
     result.events = await page.evaluate(() => compositionRuntime.events);
     await journal.append('events', result.events);

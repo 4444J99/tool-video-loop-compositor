@@ -38,6 +38,7 @@ const RAW_CHECKS = ['completed', 'noFailure', 'fullDuration', 'enoughSamples', '
 const COVERAGE_CHECKS = ['initialSet', 'targetSet', 'targetIsolation', 'siblingSet', 'siblingIsolation',
   'siblingIncomingOverlap', 'preludeResources', 'preludeNativeProgress', 'allSourcesDecodedAndWrapped',
   'finalSourcesSustained', 'heldComposition', 'strategiesMatch'];
+const MIN_OVERLAP_SPAN_MS = 2 * 137;
 const RESCUE_POLICY = Object.freeze({enabled: true, graceSimSec: .2, maximumFadeSec: .2, fadeSec: .2});
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -465,7 +466,10 @@ function overlapEvidence(rows, afterTarget, afterSibling, targetCohort, incoming
     previous = {wall: row.wall, identity, sourceChanges: p.sourceChanges,
       callbacks: incoming.callbacks, decoded: incoming.decoded};
   }
-  result.pass = result.observations >= 3 && result.advances >= 2;
+  // Three observations at the 137 ms host cadence implied at least two sample intervals of concurrent decoding. A
+  // denser recorder must not make a momentary overlap enough, so the span is required explicitly.
+  result.spanMs = result.observations ? rows.at(-1).wall - rows[0].wall : 0;
+  result.pass = result.observations >= 3 && result.advances >= 2 && result.spanMs >= MIN_OVERLAP_SPAN_MS;
   return result;
 }
 

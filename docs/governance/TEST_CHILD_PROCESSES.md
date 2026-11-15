@@ -28,9 +28,11 @@ fix for its cause. Do not describe the cause as known in a commit, an issue or a
 
 `src/simvltanea/test_subprocess_sweep_lint.py` fails when a test file calls `subprocess.run`,
 `check_output`, `check_call`, `call` or `Popen` on a render, ffmpeg, ffprobe or node child, or on a
-`python -m` module child (the CLI, a build or a verifier), without the helper. A command held in a
-variable, or unpacked into a list, is judged by what the same function assigned to it. Calls of `git`,
-`swift`, `rm` and `python -c` snippets are not covered. The helper has no `check_output` equivalent:
+`python -m` module child (the CLI, a build or a verifier), without the helper. A command held in a variable, or unpacked into a list, is judged by what the module assigns to that
+name (plain or annotated, at any depth). The match is on the words `ffmpeg`, `ffprobe`, `node`, `render`
+and on a `-m` module run by a python executable, anywhere in the call, so a child whose arguments merely
+mention one of them can be flagged. A call whose program is `git`, `swift` or `rm` is never flagged, and
+`python -c` snippets are not covered. The helper has no `check_output` equivalent:
 write `retry.run(command, check=True, stdout=subprocess.PIPE).stdout`.
 
 The test keeps a `PENDING` list of files whose calls are not converted yet. A file outside the list

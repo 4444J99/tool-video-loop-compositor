@@ -22,6 +22,8 @@ BARE = {'run', 'check_output', 'check_call', 'call', 'Popen'}
 # What marks a child as a render, ffmpeg or node child: the program, or a name that stands for it. A python
 # ``-m`` module child (the CLI, a build or a verifier) can render as well, so it counts too.
 CHILD = re.compile(r'ffmpeg|ffprobe|\bnode\b|\bNODE\b|node_executable|render', re.IGNORECASE)
+# Programs that are never a render, ffmpeg or node child, whatever their arguments say (a commit message may say render).
+OTHER_PROGRAMS = {'git', 'swift', 'rm'}
 PYTHON = re.compile(r'executable|python')
 MODULE = re.compile(r"['\"]-m['\"]")
 
@@ -66,27 +68,55 @@ def opaque(command: ast.AST) -> bool:
     return isinstance(command, ast.List) and any(isinstance(item, ast.Starred) for item in command.elts)
 
 
+def assigned(tree: ast.AST, names: set[str]) -> list[ast.AST]:
+    """Every value the module assigns to one of ``names``, plain or annotated, at any depth."""
+    values = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in node.targets):
+            values.append(node.value)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None \
+                and isinstance(node.target, ast.Name) and node.target.id in names:
+            values.append(node.value)
+    return values
+
+
+def program_of(command: ast.AST, tree: ast.AST) -> str | None:
+    """The program a command list starts with, following a name or an unpacked name to what it was assigned."""
+    if isinstance(command, ast.List) and command.elts:
+        head = command.elts[0]
+        if isinstance(head, ast.Starred):
+            head = head.value
+        if isinstance(head, ast.Constant) and isinstance(head.value, str):
+            return head.value
+        if isinstance(head, ast.Name):
+            for value in assigned(tree, {head.id}):
+                found = program_of(value, tree)
+                if found:
+                    return found
+    if isinstance(command, ast.Name):
+        for value in assigned(tree, {command.id}):
+            found = program_of(value, tree)
+            if found:
+                return found
+    return None
+
+
 def bare_child_calls(source: str) -> list[int]:
     """Line numbers of subprocess calls that spawn a render, ffmpeg or node child without the retry helper."""
     tree = ast.parse(source)
-    enclosing: dict[int, ast.AST] = {}
-    for scope in ast.walk(tree):
-        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            for child in ast.walk(scope):
-                enclosing[id(child)] = scope
     lines = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in BARE
                 and isinstance(node.func.value, ast.Name) and node.func.value.id == 'subprocess'):
             continue
+        if node.args and program_of(node.args[0], tree) in OTHER_PROGRAMS:
+            continue
         text = ast.unparse(node)
         if node.args and opaque(node.args[0]):
-            # An opaque command (a variable, or a list that unpacks one): add what its names were assigned.
-            scope = enclosing.get(id(node), tree)
+            # An opaque command (a variable, or a list that unpacks one): add what its names were assigned anywhere in
+            # the module, so a module-level command used inside a function is seen as well.
             names = {n.id for n in ast.walk(node.args[0]) if isinstance(n, ast.Name)}
-            for assign in ast.walk(scope):
-                if isinstance(assign, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in assign.targets):
-                    text += ' ' + ast.unparse(assign.value)
+            text += ' ' + ' '.join(ast.unparse(value) for value in assigned(tree, names))
         if CHILD.search(text) or (PYTHON.search(text) and MODULE.search(text)):
             lines.append(node.lineno)
     return sorted(lines)
@@ -121,10 +151,20 @@ class DetectorTests(unittest.TestCase):
         self.assertEqual(bare_child_calls(starred), [4])
         self.assertEqual(bare_child_calls("import subprocess\ndef go():\n    command = ['git', 'x']\n    subprocess.run(command)\n"), [])
 
+    def test_follows_annotated_and_module_level_commands(self):
+        annotated = "import subprocess\ndef go():\n    command: list = ['ffmpeg', 'x']\n    subprocess.run(command)\n"
+        self.assertEqual(bare_child_calls(annotated), [4])
+        module_level = "import subprocess\nCOMMAND = ['node', '-e', '0']\ndef go():\n    subprocess.run(COMMAND)\n"
+        self.assertEqual(bare_child_calls(module_level), [4])
+        unpacked = "import subprocess\nCOMMON = ['ffmpeg', '-y']\nclass T:\n    def go(self):\n        subprocess.run([*COMMON, 'x'])\n"
+        self.assertEqual(bare_child_calls(unpacked), [5])
+
     def test_leaves_the_helper_and_other_children_alone(self):
         self.assertEqual(bare_child_calls("retry.run(['ffmpeg', 'x'])\n"), [])
         self.assertEqual(bare_child_calls("import subprocess\nsubprocess.run(['git', 'init'])\n"), [])
-        self.assertEqual(bare_child_calls("import subprocess\nsubprocess.run(['git', 'commit', '-m', 'render'])\n"), [2])
+        self.assertEqual(bare_child_calls("import subprocess\nsubprocess.run(['git', 'commit', '-m', 'render'])\n"), [])
+        unpacked = "import subprocess\ndef go():\n    git = ['git', '-C', 'x']\n    subprocess.run([*git, 'commit', '-m', 'render'])\n"
+        self.assertEqual(bare_child_calls(unpacked), [])
         self.assertEqual(bare_child_calls("import subprocess\nsubprocess.run(['git', 'commit', '-m', 'note'])\n"), [])
         self.assertEqual(bare_child_calls("import subprocess\nsubprocess.run(['swift', 'build'])\n"), [])
 

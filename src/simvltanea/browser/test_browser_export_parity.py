@@ -36,7 +36,7 @@ import http.server
 import io
 import json
 import math
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import threading
 import unittest
@@ -92,7 +92,7 @@ class ExportReader:
     """
 
     def __init__(self, path: Path, width: int, height: int):
-        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), '-frames:v', '1', '-f', 'rawvideo',
+        raw = retry.run(['ffmpeg', '-v', 'error', '-i', str(path), '-frames:v', '1', '-f', 'rawvideo',
                               '-pix_fmt', 'yuv444p', '-'], capture_output=True, check=True).stdout
         size = width * height
         if len(raw) != 3 * size:
@@ -407,7 +407,7 @@ class BrowserExportParityTests(unittest.TestCase):
         command = [sys.executable, '-m', 'simvltanea.rendering.render_triptych', '--state', str(case['export']),
                    '--orientation', orientation, '--width', str(width), '--height', str(height),
                    '--preset', 'ultrafast', '--output', str(output)]
-        done = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
+        done = retry.run(command, cwd=REPO, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr[-4000:])
         return output
 

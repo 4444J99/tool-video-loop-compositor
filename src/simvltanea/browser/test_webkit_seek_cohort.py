@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -177,7 +177,7 @@ for (const wall of [3466, 3603]) {
 
 
 def execute(body: str):
-    completed = subprocess.run(['node', '-e', FIXTURE + body, str(HELPER)],
+    completed = retry.run(['node', '-e', FIXTURE + body, str(HELPER)],
                                capture_output=True, text=True, timeout=15)
     if completed.returncode:
         raise AssertionError(f'Node contract check failed:\n{completed.stderr}')

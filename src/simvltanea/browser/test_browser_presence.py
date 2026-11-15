@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -14,7 +14,7 @@ PRESENCE = HERE / 'browser.presence.js'
 def execute(body: str):
     if not PRESENCE.is_file():
         raise AssertionError('Clip presence helper has not been implemented')
-    result = subprocess.run(
+    result = retry.run(
         [shutil.which('node') or 'node', '-e',
          "const api = require(process.argv[1]); const {ATTACK_SECONDS, presenceEnvelope, filterTargets} = api;\n" + body,
          str(PRESENCE)], text=True, capture_output=True, timeout=30, check=True,

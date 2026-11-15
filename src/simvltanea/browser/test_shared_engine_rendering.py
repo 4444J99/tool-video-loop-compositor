@@ -4,7 +4,7 @@ This is a Node logic tier, not browser, decoded-media or hardware acceptance.
 """
 import json
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 from pathlib import Path
 
@@ -72,6 +72,6 @@ vm.runInContext(`
   console.log(JSON.stringify({direction:true,identity:true,snapshot:true,slice:true,release:true}));
 `,context);
 '''
-        result = subprocess.run(['node', '-e', script, str(runtime), str(adapter)],
+        result = retry.run(['node', '-e', script, str(runtime), str(adapter)],
                                 check=True, capture_output=True, text=True, timeout=30)
         self.assertTrue(all(json.loads(result.stdout).values()))

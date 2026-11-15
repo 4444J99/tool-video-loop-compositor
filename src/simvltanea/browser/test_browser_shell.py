@@ -2,7 +2,7 @@
 import json
 from html.parser import HTMLParser
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 from .browser_iterations import ENGINEERED_ITERATIONS
@@ -60,7 +60,7 @@ class ShellTests(unittest.TestCase):
         if not shutil.which('node'):
             self.skipTest('Node required')
         script = 'const SOURCE=' + json.dumps(SHELL_JS) + ';\n' + NODE_HARNESS + assertions
-        result = subprocess.run(['node', '-e', script], capture_output=True,
+        result = retry.run(['node', '-e', script], capture_output=True,
                                 text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
 

@@ -1,6 +1,6 @@
 """Diagnostic setup owns options before media admission and preserves real API boundaries."""
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -9,7 +9,7 @@ ADAPTER = Path(__file__).with_name('verify_webkit_seek_adapter.js')
 
 class SeekAdapterTests(unittest.TestCase):
     def run_node(self, body):
-        result = subprocess.run(['node', '-e', "const assert=require('node:assert/strict'); const api=require(process.argv[1]);\n" + body,
+        result = retry.run(['node', '-e', "const assert=require('node:assert/strict'); const api=require(process.argv[1]);\n" + body,
                                  str(ADAPTER)], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

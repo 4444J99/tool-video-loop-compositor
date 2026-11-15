@@ -34,7 +34,7 @@ import json
 import math
 import os
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -182,7 +182,7 @@ def wire(value):
 
 
 def node(*calls) -> list[dict]:
-    completed = subprocess.run([node_executable(), '-e', DRIVER, str(COMPILER)],
+    completed = retry.run([node_executable(), '-e', DRIVER, str(COMPILER)],
                                input=json.dumps(wire(list(calls))), capture_output=True,
                                text=True, check=True, timeout=300)
     return json.loads(completed.stdout)
@@ -220,7 +220,7 @@ process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
 
 
 def node_layout_files(items) -> list[dict]:
-    completed = subprocess.run([node_executable(), '-e', LAYOUT_DRIVER, str(COMPILER)],
+    completed = retry.run([node_executable(), '-e', LAYOUT_DRIVER, str(COMPILER)],
                                input=json.dumps([[str(path), name] for path, name in items]),
                                capture_output=True, text=True, check=True, timeout=300)
     return json.loads(completed.stdout)
@@ -268,7 +268,7 @@ def strips_state(count: int, slice_value='strips', *, preset='strips', fps: int 
 
 
 def node_inheritance(state: dict) -> dict:
-    completed = subprocess.run([node_executable(), '-e', INHERITANCE_DRIVER, str(COMPILER)],
+    completed = retry.run([node_executable(), '-e', INHERITANCE_DRIVER, str(COMPILER)],
                                input=json.dumps(state), capture_output=True, text=True, check=True, timeout=300)
     return json.loads(completed.stdout)
 
@@ -660,7 +660,7 @@ class LoopCountTests(unittest.TestCase):
     def test_supported_counts_are_one_to_twelve(self):
         script = 'const C = require(process.argv[1]); process.stdout.write(JSON.stringify(' \
                  '[C.SUPPORTED_LOOP_COUNTS, C.MIN_LOOPS, C.MAX_LOOPS, Object.isFrozen(C.SUPPORTED_LOOP_COUNTS)]))'
-        completed = subprocess.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
+        completed = retry.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
                                    check=True, timeout=60)
         self.assertEqual(json.loads(completed.stdout), [list(range(1, 13)), 1, 12, True])
 
@@ -818,7 +818,7 @@ class StripsExpansionParityTests(unittest.TestCase):
 
     def test_default_preset_data_is_python_data(self):
         script = 'const C = require(process.argv[1]); process.stdout.write(C.canonicalJson(C.DEFAULT_STRIPS_PRESET))'
-        completed = subprocess.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
+        completed = retry.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
                                    check=True, timeout=60)
         self.assertEqual(completed.stdout, c.canonical_json(DEFAULT_STRIPS_PRESET))
 
@@ -1143,7 +1143,7 @@ class LayoutBundleTests(unittest.TestCase):
     def run_module(self, *arguments: str) -> bytes:
         src = Path(__file__).resolve().parents[2]
         env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(src), str(src.parent)]))
-        return subprocess.run([sys.executable, '-m', 'simvltanea.browser.layout_bundle', *arguments], env=env,
+        return retry.run([sys.executable, '-m', 'simvltanea.browser.layout_bundle', *arguments], env=env,
                               capture_output=True, check=True, timeout=120).stdout
 
     def test_module_entry_prints_the_bundle(self):
@@ -1458,7 +1458,7 @@ class PlayStateCompilerTests(unittest.TestCase):
         state = out['state']
         self.assertEqual(state['frames'], 14400)
         self.assertGreater(len(state['events']), 25000)
-        completed = subprocess.run([node_executable(), '-e', TIMED_DRIVER, str(COMPILER)], input=json.dumps(state),
+        completed = retry.run([node_executable(), '-e', TIMED_DRIVER, str(COMPILER)], input=json.dumps(state),
                                    capture_output=True, text=True, check=True, timeout=300)
         result = json.loads(completed.stdout)
         self.assertLess(result['seconds'], LARGE_STATE_SECONDS,

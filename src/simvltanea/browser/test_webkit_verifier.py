@@ -499,6 +499,72 @@ parkRows[0].wall -= 140; parkRows[0].decks[1].progress.foregroundSince = 1;''',
                 self.assertFalse(summary['pass'], summary)
                 self.assertEqual(summary['resourceErrors'].get('admittedPreparations', []), [])
 
+    OBSERVER_GAP_CASE = {'id': 'loop-2', 'before': 38178, 'error': 38504, 'first': 38429,
+                         'parked': 38642, 'lastPark': 42006, 'resume': 42157,
+                         'frames': [42163, 42196], 'visible': 42196, 'promoted': 44896}
+
+    def classify_observer_gap(self, mutation: str = '', case: dict | None = None) -> dict:
+        # The sampler was delayed 2 s after the first visible rows (run 43732681195). The page ran throughout: its
+        # simulation clock and the incoming deck's frame callbacks advance with wall time after visibility.
+        return classify_resources('globalThis.parkedCase = ' + json.dumps(case or self.OBSERVER_GAP_CASE) + ';\n'
+                                  + PARKED_BLOB + r'''
+for (const row of parkRows) {
+  row.simTime = row.wall / 1000;
+  if (row.wall > parkedCase.visible) row.decks[1].callbacks = row.wall;
+}
+''' + mutation)
+
+    def test_one_observer_side_gap_after_visibility_still_admits_the_standby(self):
+        summary = self.classify_observer_gap()
+        self.assertTrue(summary['pass'], summary)
+        proof = summary['resourceErrors']['admittedPreparations'][0]
+        self.assertEqual((proof['id'], proof['deck'], proof['epoch']), ('loop-2', 1, 1))
+        self.assertEqual(proof['promotedAt'], 44896)
+
+    def test_a_gap_is_not_bridged_unless_the_page_demonstrably_ran(self):
+        for label, mutation in (
+            ('simulation clock frozen', "for (const row of parkRows) if (row.wall > parkedCase.visible + 700) row.simTime = (parkedCase.visible + 700) / 1000;"),
+            ('simulation clock lags the gap', "for (const row of parkRows) if (row.wall > parkedCase.visible + 700) row.simTime = (parkedCase.visible + 700) / 1000 + .5;"),
+            ('incoming callbacks flat', "for (const row of parkRows) if (row.wall > parkedCase.visible) row.decks[1].callbacks = 99;"),
+            ('incoming deck absent after the gap', "parkRows.at(-1).decks.splice(1, 1);"),
+        ):
+            with self.subTest(label):
+                summary = self.classify_observer_gap(mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
+    def test_a_bridged_gap_cannot_hide_a_changed_source_epoch_or_foreground_start(self):
+        for label, mutation in (
+            ('epoch', "parkRows.at(-1).decks[1].progress.epoch = 2;"),
+            ('foreground start', "parkRows.at(-1).decks[1].progress.foregroundSince += 1;"),
+            ('url', "parkRows.at(-1).decks[1].progress.url = 'blob:http://127.0.0.1/other';"),
+        ):
+            with self.subTest(label):
+                summary = self.classify_observer_gap(mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
+    def test_only_one_gap_and_only_a_bounded_one_is_bridged(self):
+        # A second gap between the visible rows and promotion.
+        two = self.classify_observer_gap(case=dict(self.OBSERVER_GAP_CASE, promoted=47000), mutation=
+            "const late = makeParkRow(parkedCase.visible + 2700, 'CROSSFADING', false, true, false, 3, .25);"
+            "late.simTime = late.wall / 1000; late.decks[1].callbacks = late.wall;"
+            "parkRows.splice(parkRows.length - 1, 0, late);")
+        self.assertFalse(two['pass'], two)
+        self.assertEqual(two['resourceErrors']['admittedPreparations'], [])
+        # A gap beyond the five second bound, even with a live page.
+        long_gap = dict(self.OBSERVER_GAP_CASE, promoted=42196 + 700 + 5500)
+        summary = self.classify_observer_gap(case=long_gap)
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
+    def test_a_gap_before_the_frames_and_visibility_are_proven_is_never_bridged(self):
+        # The observer exception covers promotion only; the pre-visibility evidence stays continuous.
+        case = dict(self.OBSERVER_GAP_CASE, visible=44196, frames=[44163, 44196], resume=44157, promoted=45500)
+        summary = self.classify_observer_gap(case=case)
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
     def test_hidden_resume_cannot_delay_visibility_beyond_its_evidence_deadline(self):
         # Two early decoded frames cannot justify a later visibility boundary.
         case = {'id': 'loop-2', 'before': 38178, 'error': 38504, 'first': 38429,

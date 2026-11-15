@@ -24,6 +24,17 @@ const callbackTotal = row => (row.decks || []).reduce((sum, deck) => sum + (Numb
 const frameTotal = row => (row.decks || []).reduce((sum, deck) =>
   sum + (Number.isFinite(deck.quality?.totalVideoFrames) ? deck.quality.totalVideoFrames : 0), 0);
 
+// True when, between two samples, the page's simulation clock advanced at least 90% of the wall gap and the named deck
+// (matched by id and deck index) kept receiving frame callbacks. The delay was then in the observer, not the page.
+function pageAliveAcross(before, after, identity) {
+  const gapMs = after.wall - before.wall;
+  if (!(gapMs > 0) || !Number.isFinite(after.simTime) || !Number.isFinite(before.simTime)) return false;
+  const find = row => (row.decks || []).find(deck => deck.populated && deck.id === identity.id && deck.deck === identity.deck);
+  const was = find(before), now = find(after);
+  return (after.simTime - before.simTime) * 1000 >= gapMs * .9 && Boolean(was && now) &&
+    Number.isFinite(was.callbacks) && Number.isFinite(now.callbacks) && now.callbacks > was.callbacks;
+}
+
 // Gaps longer than GAP_MS between consecutive samples. pageAlive is true when, across the gap, the page's simulation
 // clock advanced and its frame callbacks kept arriving: the delay was then in the observer, not in the page.
 function samplerGaps(rows, thresholdMs = GAP_MS) {
@@ -74,4 +85,4 @@ function decodeFreezes(rows, thresholdMs = FREEZE_MS) {
     windows: windows.slice(0, 16)};
 }
 
-module.exports = {observe, samplerGaps, decodeFreezes, GAP_MS, FREEZE_MS};
+module.exports = {pageAliveAcross, observe, samplerGaps, decodeFreezes, GAP_MS, FREEZE_MS};

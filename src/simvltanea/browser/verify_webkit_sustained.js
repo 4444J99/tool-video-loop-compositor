@@ -11,7 +11,7 @@ const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {once} = require('node:events');
 const {silentLaunch} = require('./silent_browser.js');
-const {observe, samplerGaps, decodeFreezes} = require('./webkit_sampler_diagnostics.js');
+const {observe, samplerGaps, decodeFreezes, pageAliveAcross} = require('./webkit_sampler_diagnostics.js');
 const DURATION_MS = 180000, SAMPLE_MS = 137, MAX_HOLD_MS = 2000;
 // A hosted macOS runner can stall a native decoder for 2 to 3 s once or twice in a 3 minute run and
 // then recover. The running maximum a hold leaves behind must not condemn the whole run: a hold of at
@@ -242,8 +242,22 @@ function admittedPreparation(result, error, expectedRetirements) {
   const firstFrame = points[0], secondFrame = points.find(frame => firstFrame && frame.wall > firstFrame.wall &&
     frame.changes > firstFrame.changes && frame.decoded !== firstFrame.decoded);
   if (!secondFrame) return null;
+  // The two decoded frames and the visibility boundary above are already proven with continuous rows. From here only
+  // promotion to the same epoch remains. One observer-side gap may be bridged, never a page-side one: the host sampler
+  // was delayed 2068 ms in a hosted run while the page's clock and this deck's frame callbacks advanced throughout
+  // (run 43732681195, seek-cohort-control). The row after the gap must still show the same identity, epoch and
+  // foreground start, so a swapped source cannot be admitted. A second gap, or a gap in which the page did not
+  // demonstrably run, returns null as before.
+  let bridged = false;
   for (let index = visibleIndex; index < rows.length; index++) {
-    if (index > visibleIndex && (rows[index].wall <= rows[index - 1].wall || rows[index].wall - rows[index - 1].wall > 1000)) return null;
+    if (index > visibleIndex) {
+      const gap = rows[index].wall - rows[index - 1].wall;
+      if (rows[index].wall <= rows[index - 1].wall) return null;
+      if (gap > 1000) {
+        if (bridged || gap > OBSERVER_GAP_BRIDGE_MS || !pageAliveAcross(rows[index - 1], rows[index], identity)) return null;
+        bridged = true;
+      }
+    }
     const state = context(rows[index]);
     if (!state || state.deck.paused || state.deck.seeking || state.deck.currentSrc !== url || state.deck.ready < 3 ||
         state.progress.foregroundSince !== foregroundAt || !validProgress(state.progress, state.row.wall, true)) return null;
@@ -260,6 +274,7 @@ function admittedPreparation(result, error, expectedRetirements) {
 }
 
 const TEARDOWN_YOUNG_MS = 5000;
+const OBSERVER_GAP_BRIDGE_MS = 5000;
 function classifyResourceErrors(result) {
   // Prelude reads belong to the same document and native source lifetimes.
   // Include them only in resource evidence, never in sustained timing/progress.

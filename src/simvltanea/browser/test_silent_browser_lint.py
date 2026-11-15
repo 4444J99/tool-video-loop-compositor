@@ -100,7 +100,7 @@ def _regex_end(source: str, i: int) -> int:
     while j < n and source[j] != '\n':
         c = source[j]
         if c == '\\':
-            j += 2
+            j += 2 if source[j + 1:j + 2] != '\n' else 1  # a backslash never carries a regex over a line break
             continue
         if c == '[':
             in_class = True
@@ -122,8 +122,11 @@ def _blank_comments(source: str) -> str:
     string never hides the code after it), regex literals are skipped whole (``/\\//`` and ``/"/`` are not comments or
     strings), and template literals nest (``${ ok ? `a` : `b` }``) with their expressions lexed as code. Text inside strings,
     regexes and templates is left in place on purpose: the scan reports a launch that is only named in text (reword it)
-    rather than risk hiding a real one. Where the lexer misreads a slash as division or as a regex, the misread span is
-    still scanned, so the error shows up as an extra report, not as a hidden launch."""
+    rather than risk hiding a real one.
+
+    Regex versus division is guessed from the previous token, so the lexer is a guard against an accidental bare launch,
+    not a parser. Known limit: a regex literal right after a closing parenthesis (``if (ok) /\\//.test(s)``) is read as
+    division, and a ``//`` or ``/*`` inside it is then read as a comment."""
     out, i, n = [], 0, len(source)
     frames = [['code', 0]]  # [kind, open-brace depth]; a template literal pushes 'tmpl', a ${ pushes 'code'
     prev, prev_word = '', ''
@@ -133,7 +136,7 @@ def _blank_comments(source: str) -> str:
             if c == '\\' and i + 1 < n:
                 out.append(source[i:i + 2]); i += 2
             elif c == '`':
-                frames.pop(); out.append(c); i += 1; prev = '`'
+                frames.pop(); out.append(c); i += 1; prev = '`'; prev_word = ''
             elif pair == '${':
                 frames.append(['code', 0]); out.append(pair); i += 2; prev = '{'
             else:
@@ -154,12 +157,13 @@ def _blank_comments(source: str) -> str:
             while j < n and source[j] != c and source[j] != '\n':
                 j += 2 if source[j] == '\\' else 1
             j = min(j + 1, n)
-            out.append(source[i:j]); i = j; prev = c
+            out.append(source[i:j]); i = j; prev = c; prev_word = ''
             continue
         if c == '`':
             frames.append(['tmpl', 0]); out.append(c); i += 1
             continue
-        if c == '/' and (prev == '' or prev in REGEX_AFTER or prev_word in REGEX_AFTER_WORDS):
+        postfix = source[max(0, i - 8):i].rstrip()[-2:] in ('++', '--') and prev in '+-'
+        if c == '/' and not postfix and (prev == '' or prev in REGEX_AFTER or prev_word in REGEX_AFTER_WORDS):
             j = _regex_end(source, i)
             out.append(source[i:j]); i = j; prev = ')'; prev_word = ''
             continue
@@ -167,7 +171,7 @@ def _blank_comments(source: str) -> str:
             frames[-1][1] += 1
         elif c == '}':
             if frames[-1][1] == 0 and len(frames) > 1:
-                frames.pop(); out.append(c); i += 1
+                frames.pop(); out.append(c); i += 1; prev = ')'; prev_word = ''
                 continue
             frames[-1][1] -= 1
         out.append(c); i += 1
@@ -252,6 +256,11 @@ class SilentLaunchLintTests(unittest.TestCase):
         # Template literals nest and their expressions are code.
         self.assertEqual(node_launches('const s = `${ok ? `a` : `b`}`;\nfetch("http://x"); webkit.launch();\n'), [2])
         self.assertEqual(node_launches('x = `a ${ {b: 1}.b } c`; // webkit.launch()\nwebkit.launch();\n'), [2])
+        # Division is not a regex: after a postfix operator, a string, a template and a closed expression.
+        self.assertEqual(node_launches('x = `${ i++ / 2 } a ${ j / 3 }`; // webkit.launch()\nwebkit.launch();\n'), [2])
+        self.assertEqual(node_launches('return "a" / 2; // webkit.launch()\nwebkit.launch();\n'), [2])
+        self.assertEqual(node_launches('x = `x` / 2; // webkit.launch()\nwebkit.launch();\n'), [2])
+        self.assertEqual(node_launches('x = /a\\\n/; // webkit.launch()\nwebkit.launch();\n'), [3])
         self.assertEqual(node_launches('const s = "a\\" // b"; await webkit.launch();\n'), [1])
         self.assertEqual(node_launches('const url = "http://x"; // chromium.launch()\n'), [])
         self.assertEqual(node_launches('await engine.launch(id);\n'), [])

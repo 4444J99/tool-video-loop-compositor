@@ -339,6 +339,11 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
             "result.samples.at(-1).decks[0].populated = false;",
             "result.samples.at(-1).decks[0].active = true;",
             "result.samples.at(-1).decks[0].ready = 4;",
+            # A standby stuck loading for over TEARDOWN_YOUNG_MS is a hung load, not a close() artefact.
+            "result.samples[result.samples.length - 60].decks = [{id: 'loop-1', deck: 1, active: false, populated: true,"
+            " src: teardownUrl, currentSrc: teardownUrl, ready: 0, nativeError: null}];",
+            "result.requestFailures = [{...result.requestFailures[0], resourceType: 'fetch'}];",
+            "result.samples.pop();",
             "result.samples.at(-1).decks[0].src = '';",
             "result.events.push({type: 'resource-retired', role: 'deck', id: 'loop-1', url: teardownUrl, wall: 100000,"
             " readyState: 0, paused: true});",

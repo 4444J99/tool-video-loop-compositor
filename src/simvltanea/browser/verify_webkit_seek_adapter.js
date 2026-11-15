@@ -148,25 +148,26 @@ const OVERLAP_RECORDER_MS = 25, OVERLAP_RECORDER_MAX_ROWS = 150;
 function installOverlapRecorder() {
   return new Function('target', `
     const snapshot = (${overlapSnapshot.toString()});
-    const state = globalThis.__overlapRecorder = {rows: [], timer: null};
+    const state = globalThis.__overlapRecorder = {rows: [], dropped: 0, timer: null};
     state.timer = setInterval(() => {
       // Cheap gate first: a full snapshot seals progress for every deck, so it is taken only while the pinned
       // standby is actually running, never during the long parked wait.
       const owner = globalThis.compositionRuntime?.nodes.get('loop-3');
       const standby = owner?.decks.find(deck => deck !== owner.active && deck.item);
-      if (!standby || standby.media.paused || standby.item.name !== target.id ||
-          state.rows.length >= ${OVERLAP_RECORDER_MAX_ROWS}) return;
+      if (!standby || standby.media.paused || standby.item.name !== target.id) return;
       const row = snapshot(), incoming = row?.incoming;
       if (!incoming || incoming.paused !== false || incoming.item !== target.id || incoming.sha !== target.sha256) return;
+      // Keep the newest rows: the crossfade that matters is the last stretch before promotion.
+      if (state.rows.length >= ${OVERLAP_RECORDER_MAX_ROWS}) { state.rows.shift(); state.dropped++; }
       state.rows.push(row);
     }, ${OVERLAP_RECORDER_MS});
   `);
 }
 function collectOverlapRecorder() {
   const state = globalThis.__overlapRecorder;
-  if (!state) return [];
+  if (!state) return {rows: [], dropped: 0};
   clearInterval(state.timer); globalThis.__overlapRecorder = null;
-  return state.rows;
+  return {rows: state.rows, dropped: state.dropped};
 }
 // Rows are the union of the protocol poll and the in-page recorder, in strictly increasing wall order. A row at the
 // same wall as the one before it is the same instant seen twice and is kept once; a row without a finite wall is a
@@ -238,7 +239,7 @@ async function prepare(page, {sample, pause, journal}, targets, result = {}, opt
     const pending = page.evaluate(replacePinned, target).then(value => {succeeded = value;}, error => {failure = error;})
       .finally(() => {done = true;});
     const qualifies = row => qualifiesAsOverlap(row, target, byRole('sibling-resident').id, byRole('target').id);
-    let loopError, recorded = [];
+    let loopError, recorded = {rows: [], dropped: 0};
     try {
       while (!done && performance.now() - began < 30000) {
         if (overlap) {
@@ -259,10 +260,13 @@ async function prepare(page, {sample, pause, journal}, targets, result = {}, opt
       catch (error) { if (!loopError) loopError = new Error('Overlap recorder could not be collected: ' + (error?.message || error)); }
     }
     if (loopError) throw loopError;
-    if (recorded.length) {
-      for (const row of recorded) await journal.append('diagnostic-sibling-incoming', row);
-      result.incomingObservations = mergeRows(result.incomingObservations, recorded);
-      result.siblingOverlap = mergeRows(result.siblingOverlap, recorded.filter(qualifies));
+    if (overlap) {
+      result.overlapRecorder = {intervalMs: OVERLAP_RECORDER_MS, maxRows: OVERLAP_RECORDER_MAX_ROWS,
+        rows: recorded.rows.length, dropped: recorded.dropped};
+      for (const row of recorded.rows) await journal.append('diagnostic-sibling-incoming', row);
+      // Qualification is recomputed over the merged observations so every qualified row is also an observation.
+      result.incomingObservations = mergeRows(result.incomingObservations, recorded.rows);
+      result.siblingOverlap = result.incomingObservations.filter(qualifies);
     }
     assert(done, 'Controlled reconciliation exceeded setup deadline');
     await pending; if (failure) throw failure;

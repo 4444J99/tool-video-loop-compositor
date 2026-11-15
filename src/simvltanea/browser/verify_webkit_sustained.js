@@ -258,6 +258,7 @@ function admittedPreparation(result, error, expectedRetirements) {
   return null;
 }
 
+const TEARDOWN_YOUNG_MS = 5000;
 function classifyResourceErrors(result) {
   // Prelude reads belong to the same document and native source lifetimes.
   // Include them only in resource evidence, never in sustained timing/progress.
@@ -303,8 +304,12 @@ function classifyResourceErrors(result) {
       // final observation, for a source that observation shows populated on a non-active deck still loading (ready 2 or below) and never retired, is the
       // harness tearing the document down, not playback failing. A closing-phase failure with no such positive
       // ownership evidence (another URL, a retired URL, an unobserved URL, an earlier phase) stays unexpected.
-      const finalRow = observations.at(-1);
-      if (blob && cancelled && error.phase === 'closing' && error.method === 'GET' && finalRow && wall >= finalRow.wall &&
+      // The read must also be young: first seen within TEARDOWN_YOUNG_MS of the final observation. A standby stuck at
+      // ready 0 for longer than that is a hung load, a playback fault that close() merely exposes.
+      const finalRow = result.samples?.at(-1);
+      const firstSeen = finalRow && observations.find(row => (row.decks || []).some(deck => deck.src === url))?.wall;
+      if (blob && cancelled && error.phase === 'closing' && error.method === 'GET' && error.resourceType === 'other' &&
+          finalRow && wall >= finalRow.wall && Number.isFinite(firstSeen) && finalRow.wall - firstSeen <= TEARDOWN_YOUNG_MS &&
           (finalRow.decks || []).some(deck => deck.populated && !deck.active && deck.ready <= 2 && deck.src === url) &&
           !(result.events || []).some(event => event?.type === 'resource-retired' && event.url === url)) {
         classified.expectedTeardown.push({...reference, finalObservedAt: finalRow.wall, lagMs: wall - finalRow.wall});

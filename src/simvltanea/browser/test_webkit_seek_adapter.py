@@ -173,11 +173,37 @@ class SeekAdapterTests(unittest.TestCase):
           incoming.media.paused=false;incoming.paused=false;
           for(let i=0;i<5;i++){incoming.decoded=i/10;tick();}
           const other=deck('X',false,0);node3.decks=[outgoing,other];tick(); // a different incoming item is not kept
-          const rows=api.collectOverlapRecorder();
-          assert.equal(rows.length,5);
+          const {rows,dropped}=api.collectOverlapRecorder();
+          assert.equal(rows.length,5);assert.equal(dropped,0);
           assert.deepEqual(rows.map(row=>row.wall),[1075,1100,1125,1150,1175]);
           assert.ok(rows.every(row=>row.incoming.item==='E'&&row.incoming.paused===false));
-          assert.equal(ticks[0].cleared,true);assert.deepEqual(api.collectOverlapRecorder(),[]);
+          assert.equal(ticks[0].cleared,true);assert.deepEqual(api.collectOverlapRecorder(),{rows:[],dropped:0});
+        """)
+
+    def test_recorder_keeps_the_newest_rows_and_reports_what_it_dropped(self):
+        self.run_node("""
+          let wall=0, ticks=[];
+          Object.defineProperty(globalThis,'performance',{value:{now:()=>wall},configurable:true});
+          globalThis.document={hidden:false};
+          globalThis.setInterval=(fn,ms)=>{ticks.push({fn,ms});return ticks.length;};
+          globalThis.clearInterval=()=>{};
+          const mk=(item,paused)=>({item:{name:item,sha256:'sha-'+item},paused,decoded:1,ready:4,callbacks:3,
+            media:{src:'blob:'+item,currentSrc:'blob:'+item,paused,readyState:4,hasAttribute:()=>true,error:null},
+            progress:{snapshot:()=>({sourceChanges:3,mediaTime:1,url:'blob:'+item})}});
+          const out=mk('C',false), inc=mk('E',false);
+          const owners=['loop-1','loop-2','loop-3','loop-4'].map(id=>({id,decks:[out,inc],active:out,item:{name:'C'},
+            birthTime:0,box:{},source:{},residentIdentity:{},binding:{},phase:'READY'}));
+          const nodes=new Map(owners.map(o=>[o.id,o]));
+          globalThis.compositionRuntime={nodes,slots:new Map(owners.map(o=>[o.id,o])),running:true,
+            audio:{context:{state:'running'}},maxForeground:4,activeStandbys:1,maxConcurrentStandbys:1};
+          globalThis.__seekCohort={remembered:new Map([...nodes].map(([id,n])=>[id,{node:n,box:n.box,decks:n.decks,
+            media:n.decks.map(d=>d.media),active:n.active,binding:n.binding,item:n.item,source:n.source,birth:0,
+            residentIdentity:n.residentIdentity}]))};
+          api.installOverlapRecorder()({id:'E',sha256:'sha-E'});
+          for(let i=0;i<200;i++){wall+=25;ticks[0].fn();}
+          const {rows,dropped}=api.collectOverlapRecorder();
+          assert.equal(rows.length,150);assert.equal(dropped,50);
+          assert.equal(rows[0].wall,25*51);assert.equal(rows.at(-1).wall,25*200);
         """)
 
     def test_merged_rows_are_strictly_increasing_and_share_one_overlap_definition(self):

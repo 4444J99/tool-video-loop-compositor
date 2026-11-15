@@ -150,9 +150,14 @@ function installOverlapRecorder() {
     const snapshot = (${overlapSnapshot.toString()});
     const state = globalThis.__overlapRecorder = {rows: [], timer: null};
     state.timer = setInterval(() => {
-      const row = snapshot(), incoming = row?.incoming;
-      if (!incoming || incoming.paused !== false || incoming.item !== target.id || incoming.sha !== target.sha256 ||
+      // Cheap gate first: a full snapshot seals progress for every deck, so it is taken only while the pinned
+      // standby is actually running, never during the long parked wait.
+      const owner = globalThis.compositionRuntime?.nodes.get('loop-3');
+      const standby = owner?.decks.find(deck => deck !== owner.active && deck.item);
+      if (!standby || standby.media.paused || standby.item.name !== target.id ||
           state.rows.length >= ${OVERLAP_RECORDER_MAX_ROWS}) return;
+      const row = snapshot(), incoming = row?.incoming;
+      if (!incoming || incoming.paused !== false || incoming.item !== target.id || incoming.sha !== target.sha256) return;
       state.rows.push(row);
     }, ${OVERLAP_RECORDER_MS});
   `);

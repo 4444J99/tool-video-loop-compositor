@@ -144,7 +144,7 @@ function overlapSnapshot() {
 // needs when the runner is slow, which is a sampling race and not a property of the product. Record inside the page
 // instead, where the cadence does not depend on the host: only rows whose incoming deck is the pinned target and is
 // unpaused are kept, so the buffer is bounded by the crossfade, not by the setup time.
-const OVERLAP_RECORDER_MS = 25, OVERLAP_RECORDER_MAX_ROWS = 400;
+const OVERLAP_RECORDER_MS = 25, OVERLAP_RECORDER_MAX_ROWS = 150;
 function installOverlapRecorder() {
   return new Function('target', `
     const snapshot = (${overlapSnapshot.toString()});
@@ -168,13 +168,19 @@ function collectOverlapRecorder() {
   clearInterval(state.timer); globalThis.__overlapRecorder = null;
   return state.rows;
 }
-// Rows are the union of the protocol poll and the in-page recorder, in strictly increasing wall order.
+// Rows are the union of the protocol poll and the in-page recorder, in strictly increasing wall order. A row at the
+// same wall as the one before it is the same instant seen twice and is kept once; a row without a finite wall is a
+// harness fault and is refused here instead of vanishing before the gate can see it.
 function mergeRows(polled, recorded) {
-  const rows = [...polled, ...recorded].sort((a, b) => a.wall - b.wall), merged = [];
+  const rows = [...polled, ...recorded];
+  for (const row of rows) assert(Number.isFinite(row?.wall), 'Overlap row has no finite wall');
+  rows.sort((a, b) => a.wall - b.wall);
+  const merged = [];
   for (const row of rows) if (!merged.length || row.wall > merged.at(-1).wall) merged.push(row);
   return merged;
 }
-// One definition of "the standby is decoding concurrently with the target" shared by both capture paths.
+// The selection predicate the host poll has always used to choose which observations to retain as overlap, now
+// shared by both capture paths. It selects; overlapEvidence and cohortIncomingObservations still judge every row.
 function qualifiesAsOverlap(row, target, residentId, pairedTargetId) {
   const incoming = row.incoming, p = incoming.progress;
   return Boolean(['READY', 'CROSSFADING'].includes(row.phase) && p?.sourceChanges >= 2 &&
@@ -232,7 +238,7 @@ async function prepare(page, {sample, pause, journal}, targets, result = {}, opt
     const pending = page.evaluate(replacePinned, target).then(value => {succeeded = value;}, error => {failure = error;})
       .finally(() => {done = true;});
     const qualifies = row => qualifiesAsOverlap(row, target, byRole('sibling-resident').id, byRole('target').id);
-    let recorded = [];
+    let loopError, recorded = [];
     try {
       while (!done && performance.now() - began < 30000) {
         if (overlap) {
@@ -246,9 +252,13 @@ async function prepare(page, {sample, pause, journal}, targets, result = {}, opt
         } else await capture();
         await pause(137);
       }
-    } finally {
-      if (overlap) recorded = await page.evaluate(collectOverlapRecorder).catch(() => []);
+    } catch (error) { loopError = error; }
+    // A recorder that cannot be read is a harness fault and must say so, never an empty evidence set.
+    if (overlap) {
+      try { recorded = await page.evaluate(collectOverlapRecorder); }
+      catch (error) { if (!loopError) loopError = new Error('Overlap recorder could not be collected: ' + (error?.message || error)); }
     }
+    if (loopError) throw loopError;
     if (recorded.length) {
       for (const row of recorded) await journal.append('diagnostic-sibling-incoming', row);
       result.incomingObservations = mergeRows(result.incomingObservations, recorded);

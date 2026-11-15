@@ -184,6 +184,8 @@ class SeekAdapterTests(unittest.TestCase):
         self.run_node("""
           const polled=[{wall:10},{wall:200},{wall:900}], recorded=[{wall:200},{wall:250},{wall:300},{wall:300.5}];
           assert.deepEqual(api.mergeRows(polled,recorded).map(row=>row.wall),[10,200,250,300,300.5,900]);
+          assert.throws(()=>api.mergeRows(polled,[{wall:NaN}]),/finite wall/);
+          assert.throws(()=>api.mergeRows(polled,[{}]),/finite wall/);
           const target={id:'E',sha256:'sha-E'};
           const row=()=>({phase:'CROSSFADING',incoming:{item:'E',sha:'sha-E',ready:4,paused:false,decoded:.4,
             src:'blob:E',currentSrc:'blob:E',progress:{sourceChanges:2}},

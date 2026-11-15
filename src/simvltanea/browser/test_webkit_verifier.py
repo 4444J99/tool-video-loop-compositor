@@ -337,6 +337,8 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
             "result.requestFailures = [{...result.requestFailures[0], url: 'blob:http://127.0.0.1/other'}];",
             "result.requestFailures = [{...result.requestFailures[0], url: 'http://127.0.0.1/library/clip.mp4'}];",
             "result.samples.at(-1).decks[0].populated = false;",
+            "result.samples.at(-1).decks[0].active = true;",
+            "result.samples.at(-1).decks[0].ready = 4;",
             "result.samples.at(-1).decks[0].src = '';",
             "result.events.push({type: 'resource-retired', role: 'deck', id: 'loop-1', url: teardownUrl, wall: 100000,"
             " readyState: 0, paused: true});",

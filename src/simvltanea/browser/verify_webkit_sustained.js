@@ -296,12 +296,12 @@ function classifyResourceErrors(result) {
         continue;
       }
       // browser.close() cancels every read still in flight. A cancelled read stamped in the closing phase, after the
-      // final observation, for a source that observation shows populated on a deck and that was never retired, is the
+      // final observation, for a source that observation shows populated on a non-active deck still loading (ready 2 or below) and never retired, is the
       // harness tearing the document down, not playback failing. A closing-phase failure with no such positive
       // ownership evidence (another URL, a retired URL, an unobserved URL, an earlier phase) stays unexpected.
       const finalRow = observations.at(-1);
       if (blob && cancelled && error.phase === 'closing' && error.method === 'GET' && finalRow && wall >= finalRow.wall &&
-          (finalRow.decks || []).some(deck => deck.populated && deck.src === url) &&
+          (finalRow.decks || []).some(deck => deck.populated && !deck.active && deck.ready <= 2 && deck.src === url) &&
           !(result.events || []).some(event => event?.type === 'resource-retired' && event.url === url)) {
         classified.expectedTeardown.push({...reference, finalObservedAt: finalRow.wall, lagMs: wall - finalRow.wall});
         continue;

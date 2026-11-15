@@ -41,14 +41,26 @@ def silence_browser(browser: Any) -> Any:
     """Make ``new_context`` and ``new_page`` on this browser hand out silenced contexts."""
     if getattr(browser, '_silent_browser', False):
         return browser
-    new_context, new_page = browser.new_context, browser.new_page
+    new_context = browser.new_context
 
     def silent_new_context(*args: Any, **kwargs: Any) -> Any:
         return silence_context(new_context(*args, **kwargs))
 
     def silent_new_page(*args: Any, **kwargs: Any) -> Any:
-        page = new_page(*args, **kwargs)
-        silence_context(page.context)
+        # Playwright's own new_page makes a context after the fact, so a script added to it would miss the blank
+        # document that set_content and add_script_tag write into. Make the silenced context first, then the page,
+        # and close the context with the page the way Playwright's owned context does.
+        context = silent_new_context(*args, **kwargs)
+        page = context.new_page()
+        page_close = page.close
+
+        def close_with_context(**close_kwargs: Any) -> None:
+            try:
+                page_close(**close_kwargs)
+            finally:
+                context.close()
+
+        page.close = close_with_context
         return page
 
     browser.new_context, browser.new_page = silent_new_context, silent_new_page

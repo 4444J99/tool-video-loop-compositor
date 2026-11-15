@@ -45,17 +45,26 @@ class FakeEngine:
         return FakeContext()
 
 
+class FakePage:
+    def __init__(self, context):
+        self.context, self.closed = context, False
+
+    def close(self, **kwargs):
+        self.closed = True
+
+
 class FakeContext:
     def __init__(self):
-        self.scripts = []
+        self.scripts, self.closed, self.pages = [], False, []
 
     def add_init_script(self, **kwargs):
         self.scripts.append(kwargs)
 
+    def new_page(self):
+        self.pages.append(FakePage(self)); return self.pages[-1]
 
-class FakePage:
-    def __init__(self):
-        self.context = FakeContext()
+    def close(self):
+        self.closed = True
 
 
 class FakeBrowser:
@@ -65,8 +74,8 @@ class FakeBrowser:
     def new_context(self, **kwargs):
         context = FakeContext(); self.contexts.append(context); return context
 
-    def new_page(self, **kwargs):
-        page = FakePage(); self.contexts.append(page.context); return page
+    def new_page(self, **kwargs):  # Playwright's own: replaced by the helper
+        raise AssertionError('the original new_page must never run: it makes its context after the fact')
 
 
 class SilentLaunchContractTests(unittest.TestCase):
@@ -90,6 +99,15 @@ class SilentLaunchContractTests(unittest.TestCase):
         page = browser.new_page()
         self.assertEqual(context.scripts, [{'path': str(INIT_SCRIPT_PATH)}])
         self.assertEqual(page.context.scripts, [{'path': str(INIT_SCRIPT_PATH)}])
+        self.assertEqual(len(browser.contexts), 2)
+
+    def test_new_page_makes_its_silenced_context_first_and_closes_it_with_the_page(self):
+        browser = silent_launch(FakeEngine('webkit'))
+        page = browser.new_page(viewport={'width': 1})
+        context = page.context
+        self.assertEqual(context.scripts, [{'path': str(INIT_SCRIPT_PATH)}])
+        page.close()
+        self.assertTrue(page.closed and context.closed)
 
     def test_wrapping_twice_does_not_inject_twice(self):
         browser = silent_launch(FakeEngine('webkit'))
@@ -112,9 +130,9 @@ class SilentLaunchContractTests(unittest.TestCase):
 NODE_DRIVER = r"""
 const {silentLaunch, silentLaunchPersistentContext, silentArgs} = require(process.argv[1]);
 const scripts = [];
-const context = () => ({addInitScript: async options => { scripts.push(options.path); }});
+const context = () => { const c = {addInitScript: async options => { scripts.push(options.path); }, closed: false, close: async () => { c.closed = true; }, newPage: async () => ({close: async () => {}})}; return c; };
 const engine = name => ({name: () => name, launched: null,
-  async launch(options) { this.launched = options; return {newContext: async () => context(), newPage: async () => ({context: () => context()})}; },
+  async launch(options) { this.launched = options; return {newContext: async () => context(), newPage: async () => { throw new Error('original newPage must not run'); }}; },
   async launchPersistentContext(dir, options) { this.launched = {dir, ...options}; return context(); }});
 (async () => {
   const chromium = engine('chromium'), webkit = engine('webkit');
@@ -178,6 +196,14 @@ class SilentBrowserPageTests(unittest.TestCase):
 
     def native(self, expression):
         return self.page.evaluate(f'(() => {{ const el = {expression}; return window.__SILENT_BROWSER__.native(el); }})()')
+
+    def test_documents_written_into_a_blank_page_are_silenced_too(self):
+        # set_content and add_script_tag write into the initial blank document, which only a context-level script covers.
+        blank = self.browser.new_page()
+        self.addCleanup(blank.close)
+        self.assertTrue(blank.evaluate('typeof window.__SILENT_BROWSER__ === "object"'))
+        blank.set_content('<audio id="a"></audio>')
+        self.assertTrue(blank.evaluate('window.__SILENT_BROWSER__.native(document.querySelector("#a")).muted === true'))
 
     def test_init_script_ran_in_the_page_and_in_a_nested_frame(self):
         self.assertTrue(self.page.evaluate('typeof window.__SILENT_BROWSER__ === "object"'))

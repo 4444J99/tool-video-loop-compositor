@@ -71,22 +71,28 @@
       Object.defineProperty(window, 'Audio', {configurable: true, writable: true, enumerable: false, value: SilentAudio});
     }
     // Parser-created and attached elements: catch them as they enter the document and as their loading begins.
+    // document.open() (what setContent and document.write use on a blank page) drops window listeners and replaces
+    // the root element, so the watch is armed again after every open.
     const sweep = root => {
       if (!root || root.nodeType !== 1) return;
       if (root instanceof HTMLMediaElement) ensure(root);
       for (const element of root.querySelectorAll('audio,video')) ensure(element);
     };
-    const watch = () => {
+    const onMediaEvent = event => { if (event.target instanceof HTMLMediaElement) ensure(event.target); };
+    let observer = null;
+    const arm = () => {
       sweep(document.documentElement);
-      new MutationObserver(records => { for (const record of records) for (const node of record.addedNodes) sweep(node); })
-        .observe(document.documentElement || document, {childList: true, subtree: true});
+      if (observer) observer.disconnect();
+      observer = new MutationObserver(records => { for (const record of records) for (const node of record.addedNodes) sweep(node); });
+      observer.observe(document, {childList: true, subtree: true});
+      for (const type of ['loadstart', 'loadedmetadata', 'canplay', 'play', 'playing']) window.addEventListener(type, onMediaEvent, true);
     };
-    if (document.documentElement) watch();
-    else new MutationObserver((records, observer) => { if (document.documentElement) { observer.disconnect(); watch(); } })
-      .observe(document, {childList: true});
-    for (const type of ['loadstart', 'loadedmetadata', 'canplay', 'play', 'playing']) {
-      window.addEventListener(type, event => { if (event.target instanceof HTMLMediaElement) ensure(event.target); }, true);
-    }
+    arm();
+    const nativeOpen = Document.prototype.open;
+    Object.defineProperty(Document.prototype, 'open', {
+      configurable: true, writable: true, enumerable: true,
+      value: function open(...args) { const result = nativeOpen.apply(this, args); arm(); return result; },
+    });
   }
 
   const Realtime = [window.AudioContext, window.webkitAudioContext].filter(Boolean);

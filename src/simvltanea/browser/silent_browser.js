@@ -26,9 +26,16 @@ async function silenceContext(context) {
 
 function silenceBrowser(browser) {
   if (browser.__silentBrowser) return browser;
-  const newContext = browser.newContext.bind(browser), newPage = browser.newPage.bind(browser);
+  const newContext = browser.newContext.bind(browser);
   browser.newContext = async (...args) => silenceContext(await newContext(...args));
-  browser.newPage = async (...args) => { const page = await newPage(...args); await silenceContext(page.context()); return page; };
+  // Playwright's own newPage makes a context after the fact, so a script added to it would miss the blank document
+  // that setContent and addScriptTag write into. Make the silenced context first, then the page, and close the
+  // context with the page the way Playwright's owned context does.
+  browser.newPage = async (...args) => {
+    const context = await browser.newContext(...args), page = await context.newPage(), pageClose = page.close.bind(page);
+    page.close = async (...closeArgs) => { try { await pageClose(...closeArgs); } finally { await context.close(); } };
+    return page;
+  };
   browser.__silentBrowser = true;
   return browser;
 }

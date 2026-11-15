@@ -370,6 +370,8 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
         for label, progress in (
             ('foreground start recorded', '{foreground: false, foregroundSince: 182000}'),
             ('foreground start at zero', '{foreground: false, foregroundSince: 0}'),
+            # foreground !== true is its own term too: a visible deck with no recorded start is not a hidden standby.
+            ('foreground flag set, no start', '{foreground: true, foregroundSince: null}'),
         ):
             with self.subTest(label):
                 summary = classify_resources(TEARDOWN_BLOB

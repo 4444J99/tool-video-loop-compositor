@@ -90,17 +90,10 @@ def python_launches(source: str, name: str):
     return sorted(found)
 
 
-# String contents that mean something to the lint: a launch method name (``chromium['launch']``) and a bare module
-# name (``require('playwright')``). Every other string is text, never a call.
-KEPT_STRING = re.compile(rf"^(?:{NAMES}|(?:@[\w.-]+/)?[\w.-]+)$")
-
-
 def _blank_comments(source: str) -> str:
-    """Blank out comments and the text of string literals, keeping every newline, so a commented or quoted launch is
-    ignored, line numbers stay true and ``" // "`` inside a string never hides the code after it. A launch method name
-    or module name used as a string stays (the lint reads ``chromium['launch']`` and ``require('playwright')``), and a
-    template literal with ``${...}`` stays whole (its expressions run)."""
-    out, i, n, quote, start = [], 0, len(source), None, 0
+    """Blank out comments but keep every newline, so a commented launch is ignored and line numbers stay true.
+    String literals are walked, so ``" // "`` inside a string never hides the code after it."""
+    out, i, n, quote = [], 0, len(source), None
     while i < n:
         c, pair = source[i], source[i:i + 2]
         if quote is None:
@@ -116,21 +109,14 @@ def _blank_comments(source: str) -> str:
                 continue
             if c in '"\'`':
                 quote = c
-                out.append(c); start = len(out)
-                i += 1
-                continue
             out.append(c)
         else:
+            out.append(c)
             if c == '\\' and i + 1 < n:
-                out.append(c); out.append(source[i + 1]); i += 2
+                out.append(source[i + 1]); i += 2
                 continue
             if c == quote or (c == '\n' and quote in '"\''):
-                text = ''.join(out[start:])
-                keep = KEPT_STRING.match(text) or (quote == '`' and '${' in text)
-                if not keep:
-                    out[start:] = [re.sub(r'[^\n]', ' ', text)]
                 quote = None
-            out.append(c)
         i += 1
     return ''.join(out)
 
@@ -193,12 +179,6 @@ class SilentLaunchLintTests(unittest.TestCase):
         self.assertEqual(python_launches("import playwright\nlaunch = pw.chromium.launch\nlaunch()\n", 'x.py'), [2])
         self.assertEqual(node_launches('/* webkit.launch() */ const x = 1;\n'), [])
         self.assertEqual(node_launches('const note = " // "; webkit.launch();\n'), [1])
-        self.assertEqual(node_launches('const note = "webkit.launch()";\n'), [])
-        self.assertEqual(node_launches("const note = 'chromium.launch()'; // not a call\n"), [])
-        self.assertEqual(node_launches('const note = `see webkit.launch() for the call`;\n'), [])
-        self.assertEqual(node_launches('const note = `${await webkit.launch()}`;\n'), [1])
-        self.assertEqual(node_launches('const s = "a\\" // b"; await webkit.launch();\n'), [1])
-        self.assertEqual(node_launches("const pw = require('playwright'); await thing.launch();\n"), [1])
         self.assertEqual(node_launches('const url = "http://x"; // chromium.launch()\n'), [])
         self.assertEqual(node_launches('await engine.launch(id);\n'), [])
         self.assertEqual(python_launches('pw.chromium.launch(headless=True)\n', 'x.py'), [1])

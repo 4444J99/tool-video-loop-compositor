@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 MODULE = Path(__file__).with_name('browser.lab_model.js')
@@ -15,7 +15,7 @@ class EffectsLabModelTests(unittest.TestCase):
     def evaluate(self, expression: str):
         self.assertTrue(MODULE.is_file(), 'The Effects Lab model has not been implemented')
         code = f'const m=require({json.dumps(str(MODULE))}); console.log(JSON.stringify({expression}));'
-        result = subprocess.run(['node', '-e', code], text=True, capture_output=True)
+        result = retry.run(['node', '-e', code], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
@@ -142,13 +142,13 @@ class EffectsLabModelTests(unittest.TestCase):
     def test_layout_normalizes_supported_families_counts_and_framing(self):
         values = self.evaluate('''({defaults:m.DEFAULT_LAYOUT,frozen:Object.isFrozen(m.DEFAULT_LAYOUT),
           strips:m.normalizeLayout({count:18,orientation:'portrait',framing:'slice'}),
-          authored:m.normalizeLayout({family:'authored',count:12,framing:'slice'}),
+          authored:m.normalizeLayout({family:'authored',count:18,framing:'slice'}),
           small:m.normalizeLayout({family:'authored',count:1}),
           merged:m.normalizeLayout({framing:'contain'},{family:'strips',count:6,orientation:'portrait',framing:'cover'})})''')
         self.assertEqual(values['defaults'], {'family':'strips','count':3,'orientation':'landscape','framing':'cover'})
         self.assertTrue(values['frozen'])
         self.assertEqual(values['strips'], {'family':'strips','count':12,'orientation':'portrait','framing':'slice'})
-        self.assertEqual(values['authored'], {'family':'authored','count':7,'orientation':'landscape','framing':'cover'})
+        self.assertEqual(values['authored'], {'family':'authored','count':12,'orientation':'landscape','framing':'cover'})
         self.assertEqual(values['small']['count'], 2)
         self.assertEqual(values['merged'], {'family':'strips','count':6,'orientation':'portrait','framing':'contain'})
 

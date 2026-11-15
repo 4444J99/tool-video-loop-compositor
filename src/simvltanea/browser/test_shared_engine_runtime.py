@@ -17,6 +17,7 @@ from pathlib import Path
 from simvltanea.browser.browser_runtime import build_preview
 from simvltanea.browser.shared_engine import resolve_shared_engine, SharedEngineUnavailable
 from simvltanea.generators.make_runtime_fixture import ROOT, prepare
+from simvltanea.browser.silent_browser import silent_launch
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -59,7 +60,7 @@ class SharedEngineRuntimeTest(unittest.TestCase):
 
         from playwright.sync_api import sync_playwright
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(
+        cls.browser = silent_launch(cls.pw.chromium, 
             executable_path=_browser_executable(), headless=True,
             args=['--no-sandbox', '--disable-dev-shm-usage'])
 

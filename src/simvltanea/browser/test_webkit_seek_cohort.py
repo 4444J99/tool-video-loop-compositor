@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -177,7 +177,7 @@ for (const wall of [3466, 3603]) {
 
 
 def execute(body: str):
-    completed = subprocess.run(['node', '-e', FIXTURE + body, str(HELPER)],
+    completed = retry.run(['node', '-e', FIXTURE + body, str(HELPER)],
                                capture_output=True, text=True, timeout=15)
     if completed.returncode:
         raise AssertionError(f'Node contract check failed:\n{completed.stderr}')
@@ -440,6 +440,44 @@ console.log(JSON.stringify(finalCohort.map(target => {
 })));
 ''')
         self.assertEqual(result, [{'pass': False, 'prelude': True, 'sustained': False}] * 4)
+
+    def test_overlap_proof_needs_cadence_inside_the_crossfade_not_a_slow_host_poll(self):
+        # Runs 43722666733 and 43721281441: the unpaused standby window is one crossfade (about half a second here)
+        # and a slow host poll saw two rows 534 ms apart. Thresholds are unchanged: three observations and two
+        # advances. Only the cadence of the evidence differs: a page-side recorder at 25 ms sees the same window.
+        result = execute(COHORT + r'''
+const crossfade = wall => {
+  const row = quartet(targetCohort, wall)[0], index = Math.round((wall - 1690) / 25);
+  for (const node of row.nodes) { node.progress.changes = node.progress.sourceChanges = node.callbacks = 200 + index; }
+  for (const deck of row.decks) deck.callbacks = 200 + index;
+  const source = sourceNode(targets[5], wall, 1 + index / 100, 106 + index);
+  const incoming = {id: 'loop-3', deck: 1, item: targets[5].id, sha: targets[5].sha256,
+    src: source.progress.url, currentSrc: source.progress.url, paused: false, ready: 4,
+    decoded: source.decoded, callbacks: source.callbacks, nativeError: null,
+    progress: {...source.progress, foreground: false, running: false}};
+  return {...row, wall, populated: 5, playing: 5, standbys: 1, incoming, slotsStable: true, peersStable: true};
+};
+const verdict = rows => {
+  const value = structuredClone(replay);
+  value.prelude.siblingOverlap = value.prelude.incomingObservations = rows.map(wall => crossfade(wall));
+  const report = api.coverage(value, targets);
+  return {gate: report.checks.siblingIncomingOverlap, overlap: report.overlap, incoming: report.incomingObservations};
+};
+const walls = n => Array.from({length: n}, (_, i) => 1690 + i * 25);
+console.log(JSON.stringify({polled: verdict([1690, 2224]), recorded: verdict(walls(22)), momentary: verdict(walls(4)),
+  merged: verdict([1690, ...walls(22).slice(1), 2224].filter((wall, i, all) => all.indexOf(wall) === i))}));
+''')
+        self.assertFalse(result['polled']['gate'], result['polled'])
+        self.assertEqual(result['polled']['overlap']['observations'], 0)
+        self.assertTrue(result['recorded']['gate'], result['recorded'])
+        self.assertGreaterEqual(result['recorded']['overlap']['observations'], 3)
+        self.assertGreaterEqual(result['recorded']['overlap']['advances'], 2)
+        self.assertTrue(result['recorded']['incoming']['pass'])
+        self.assertTrue(result['merged']['gate'], result['merged'])
+        # Density alone must not satisfy the proof: four rows 25 ms apart span 75 ms, below two host intervals.
+        self.assertFalse(result['momentary']['gate'], result['momentary'])
+        self.assertEqual(result['momentary']['overlap']['spanMs'], 75)
+        self.assertGreaterEqual(result['recorded']['overlap']['spanMs'], 274)
 
     def test_missing_or_stale_incoming_overlap_cannot_prove_the_fifth_decoder(self):
         result = execute(COHORT + r'''

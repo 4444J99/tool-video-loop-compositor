@@ -1,6 +1,6 @@
 """Owned, bounded freshness/progress monitoring across one incoming handoff."""
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 LIVE = Path(__file__).with_name('browser.live.js')
@@ -97,7 +97,7 @@ const beginReplacement=async({isRescue=true,frozen=true,duration=.2}={})=>{
 
 class HandoffMonitorTests(unittest.TestCase):
     def run_js(self, body):
-        result = subprocess.run(['node', '-e', FIXTURE + '\n(async()=>{' + body +
+        result = retry.run(['node', '-e', FIXTURE + '\n(async()=>{' + body +
                                  "\nconsole.log('complete')})().catch(error=>{console.error(error);process.exitCode=1});", str(LIVE)],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

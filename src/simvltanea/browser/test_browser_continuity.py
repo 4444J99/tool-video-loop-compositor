@@ -17,6 +17,7 @@ import simvltanea.authoring.composition as c
 from simvltanea.browser.browser_runtime import build_preview
 from simvltanea.generators.make_runtime_fixture import HERE, ROOT
 from simvltanea.browser import test_browser_runtime as existing
+from simvltanea.browser.silent_browser import init_script as silent_init_script
 
 PROBE = HERE / 'browser.continuity.js'
 OUT = ROOT / 'evidence' / 'independent-continuity'
@@ -94,6 +95,7 @@ def verify_trace(trace: dict, state: dict, checkpoints: list[dict]) -> dict:
             'max_reported_dropped_frames':max(loop['droppedFrames'] for sample in trace['samples'] for loop in sample['loops'])}
 
 
+
 class ContinuityOracleTests(unittest.TestCase):
     def trace(self):
         # Pixel reads can stall later media rows while the snapshot's wall time
@@ -152,7 +154,8 @@ class ContinuityTests(unittest.TestCase):
         self.addCleanup(page.close)
         self.errors = []
         page.on('pageerror', lambda error: self.errors.append(str(error)))
-        page.add_init_script(path=str(PROBE))
+        # Silence first, then the probe, in one evaluation, so the probe wraps the silenced connect whatever order Playwright picks.
+        page.add_init_script(silent_init_script() + '\n' + PROBE.read_text())
         if self.transport == 'in-memory':
             page.evaluate(PROBE.read_text())
         self.load_page(page, ROOT / f'preview-{name}')

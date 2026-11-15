@@ -13,6 +13,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -295,7 +296,7 @@ class RealFrameExtractionTests(TaggerTestCase):
         folder = self.root / "originals" / UUID_A
         folder.mkdir(parents=True)
         clip = folder / "clip.mov"
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10:duration=1",
+        retry.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10:duration=1",
                         "-pix_fmt", "yuv420p", str(clip)], check=True)
         (folder / ".done").write_text(json.dumps(make_receipt(width=320, height=180, duration=1.0)))
         frames = tag_clips.extract(self.root, UUID_A, 128)
@@ -319,11 +320,11 @@ def make_fixture_clips(folder: pathlib.Path) -> dict[str, pathlib.Path]:
     common = ["ffmpeg", "-v", "error", "-y"]
     encode = ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
     clips = {name: folder / f"{name}.mov" for name in ("short", "single", "normal", "garbage")}
-    subprocess.run([*common, "-f", "lavfi", "-i", "testsrc=size=1440x1080:rate=7.5:duration=0.4",
+    retry.run([*common, "-f", "lavfi", "-i", "testsrc=size=1440x1080:rate=7.5:duration=0.4",
                     "-f", "lavfi", "-i", "sine=duration=0.66", *encode, "-c:a", "aac", str(clips["short"])], check=True)
-    subprocess.run([*common, "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10", "-frames:v", "1", *encode,
+    retry.run([*common, "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10", "-frames:v", "1", *encode,
                     str(clips["single"])], check=True)
-    subprocess.run([*common, "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=2",
+    retry.run([*common, "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=2",
                     "-f", "lavfi", "-i", "sine=duration=2", *encode, "-c:a", "aac", str(clips["normal"])], check=True)
     clips["garbage"].write_bytes(bytes((i * 37 + 11) % 256 for i in range(4096)))
     return clips
@@ -362,7 +363,7 @@ class ShortAndBrokenClipTests(TaggerTestCase):
             self.assertNotIn(private, text)
 
     def test_fixture_container_is_longer_than_its_video(self):
-        facts = json.loads(subprocess.run(
+        facts = json.loads(retry.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
              "stream=duration,nb_frames:format=duration", "-of", "json", str(self.fixtures["short"])],
             capture_output=True, text=True, check=True).stdout)
@@ -410,7 +411,7 @@ class ShortAndBrokenClipTests(TaggerTestCase):
         # Matroska does not store nb_frames: ffprobe prints N/A and the count must be estimated.
         mkv = self.root / "originals" / UUID_A / "clip.mkv"
         self.add_clip(UUID_A, width=1440, height=1080, duration=0.66)
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(self.fixtures["short"]), "-c", "copy", str(mkv)], check=True)
+        retry.run(["ffmpeg", "-v", "error", "-y", "-i", str(self.fixtures["short"]), "-c", "copy", str(mkv)], check=True)
         (self.root / "originals" / UUID_A / ".done").write_text(json.dumps(
             {"video": {"name": "clip.mkv", "duration": 0.66, "width": 1440, "height": 1080}}))
         self.assert_three_real_jpegs(tag_clips.extract(self.root, UUID_A, 128))
@@ -1100,10 +1101,10 @@ def rotated_facts(coded_width: int, coded_height: int, rotation: int | None) -> 
 def make_rotated_clip(path: pathlib.Path, rotation: int) -> None:
     """A real 64x48 coded clip with a display matrix (the two-step form FFmpeg 6.1 accepts)."""
     staging = path.with_name("staging.mov")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=0.5",
+    retry.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=0.5",
                     "-c:v", "libx264", "-pix_fmt", "yuv420p", str(staging)], check=True)
     option = ["-display_rotation:v:0", str(rotation)] if rotation else []
-    subprocess.run(["ffmpeg", "-v", "error", "-y", *option, "-i", str(staging), "-c", "copy", str(path)], check=True)
+    retry.run(["ffmpeg", "-v", "error", "-y", *option, "-i", str(staging), "-c", "copy", str(path)], check=True)
     staging.unlink()
 
 

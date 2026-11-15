@@ -6,12 +6,13 @@ import io
 import json
 from pathlib import Path
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 import wave
 
 from .browser_lab import LAB_FILES, LAB_HTML, lab_files
 from .layout_bundle import layout_bundle_v2
+from simvltanea.browser.silent_browser import silent_launch
 
 MODULE = Path(__file__).with_name('browser.lab_ui.js')
 
@@ -118,7 +119,7 @@ class EffectsLabShellTests(unittest.TestCase):
 class EffectsLabUIContractTests(unittest.TestCase):
     def evaluate(self, expression):
         script = f"const ui=require({json.dumps(str(MODULE))}); const m=global.SimvltaneaLabModel; (async()=>{{console.log(JSON.stringify(await ({expression})));}})().catch(error=>{{console.error(error);process.exit(1);}});"
-        result = subprocess.run(['node', '-e', script], check=True, text=True, capture_output=True)
+        result = retry.run(['node', '-e', script], check=True, text=True, capture_output=True)
         return json.loads(result.stdout)
 
     def test_a_setting_edit_targets_one_voice_and_one_key(self):
@@ -538,7 +539,7 @@ class EffectsLabLocalRestoreTests(unittest.TestCase):
             raise unittest.SkipTest('Playwright is required for local-media restore tests')
         from simvltanea.browser.test_browser_runtime import browser_executable
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(),
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=browser_executable(),
                                             headless=True, args=['--no-sandbox'])
 
     @classmethod

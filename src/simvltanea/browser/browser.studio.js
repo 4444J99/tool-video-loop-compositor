@@ -23,7 +23,8 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
  *
  * Each roll (rollComposition) picks a family, a panel count it offers, distinct
  * loops in some order and, for strips, a zoom and lateral jitter within the preset
- * ranges. ?seed=<uint32> reproduces a roll; ?mix= records hand edits on top of it.
+ * ranges. ?seed=<uint32> reproduces a roll; ?rv=2 marks the current roll version (a link without it
+ * replays its original draw, see ROLL_VERSION); ?mix= records hand edits on top of it.
  *
  * Sound is gated by the browser until the first gesture. Before it the plan is the
  * silent v1 field (muted video autoplays); after it persistent audio bindings
@@ -300,14 +301,33 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   const ROLL_Z1 = ['5/4', '3/2', '2', '5/2', '3'];
   const ROLL_JITTER = ['0', '0', '1/100', '1/50', '1/40', '1/20'];
 
+  /* Roll versions. A seed alone must keep producing the roll it produced when it was shared, so the
+   * counts a roll may pick from are part of its identity. Version 1 (every link without ?rv) draws the
+   * authored family from 2..7 only, exactly as before authored mosaics for 8..12 existed; version 2
+   * (?rv=2, written for every fresh roll) draws from every count the family offers. Strips and
+   * visitor layouts are unchanged by the version. Hand edits (panel count, family) are not rolls and
+   * may use any offered count under either version. */
+  const ROLL_VERSION = 2;
+  const LEGACY_ROLL_MAX = {authored: 7};
+  function rollCounts(family, counts, version = 1) {
+    const limit = version >= 2 ? Infinity : LEGACY_ROLL_MAX[family] ?? Infinity;
+    return counts.filter(count => count <= limit);
+  }
+  // ?rv=2 is the current roll; a seed without it is a version 1 link; no seed at all is a fresh roll.
+  function parseRollVersion(search) {
+    if (new URLSearchParams(search || '').get('rv') === '2') return ROLL_VERSION;
+    return parseSeed(search) === null ? ROLL_VERSION : 1;
+  }
+
   /* One accident: a family, a panel count it supports (at most `pool` loops), which loops in
    * which order, and the strips framing. `families` maps a family name to its counts. */
-  function rollComposition(seed, families, pool) {
+  function rollComposition(seed, families, pool, version = 1) {
     const random = seededRandom(seed);
-    const names = Object.keys(families).sort().filter(name => families[name].some(count => count <= pool));
+    const counts = name => rollCounts(name, families[name], version).filter(count => count <= pool);
+    const names = Object.keys(families).sort().filter(name => counts(name).length);
     if (!names.length) return null;
     const family = pick(names, random);
-    const panels = pick(families[family].filter(count => count <= pool), random);
+    const panels = pick(counts(family), random);
     const loops = shuffled(Array.from({length: pool}, (_, index) => index), random).slice(0, panels);
     const style = {z1: pick(ROLL_Z1, random), jitter: pick(ROLL_JITTER, random), reverse: random() < 0.5};
     return {seed: seed >>> 0, family, panels, loops, style};
@@ -481,12 +501,13 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
 
   /* One accident from the library: a family and a count it offers, the strips framing, then clips
    * chosen by their tags and placed in a seeded order. Same seed and same manifest, same clips. */
-  function rollLibrary(seed, families, clips, exclude = []) {
+  function rollLibrary(seed, families, clips, exclude = [], version = 1) {
     const random = seededRandom(seed), available = clips.length - new Set(exclude).size;
-    const names = Object.keys(families).sort().filter(name => families[name].some(count => count <= available));
+    const counts = name => rollCounts(name, families[name], version).filter(count => count <= available);
+    const names = Object.keys(families).sort().filter(name => counts(name).length);
     if (!names.length) return null;
     const family = pick(names, random);
-    const panels = pick(families[family].filter(count => count <= available), random);
+    const panels = pick(counts(family), random);
     const style = {z1: pick(ROLL_Z1, random), jitter: pick(ROLL_JITTER, random), reverse: random() < 0.5};
     const loops = shuffled(chooseClips(clips, panels, family, random, [], exclude), random);
     return {seed: seed >>> 0, family, panels, loops, style};
@@ -691,11 +712,26 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     return params.toString();
   }
 
+  // Re-attempt delay for a deferred loop-mode handoff: one outgoing loop, 1 to 8 s.
+  // `quantized.duration` is a rational string ("13/2"); only `seconds` is a number.
+  function repairDelayMs(items) {
+    const seconds = Math.max(0, ...items.map(item => Number(item?.quantized?.seconds) || 0));
+    return Math.min(8000, Math.max(1000, seconds * 1000));
+  }
+  // The same user intent: an edit changes the seed, family, style or loops; a
+  // playback-only publish rebuilds the selection object from the same values.
+  function sameIntent(a, b) {
+    return Boolean(a && b) && a.seed === b.seed && a.family === b.family && a.style === b.style &&
+      a.loops.length === b.loops.length && a.loops.every((value, index) => value === b.loops[index]);
+  }
+
   const api = {
+    repairDelayMs, sameIntent,
     FPS, DEFAULT_SECONDS, DEFAULT_PANELS, MAX_TOTAL_BYTES, MIN_FRAMES, MAX_SPANS_PER_TRACK, OWN_FAMILY,
     quantizeDuration, admitSize, countVerdict, spanVerdict, nearestCount, familyLabel, oneLine, sniffContainer,
     playbackQueries, blobType, mediaSuffix, compositionFrames, formatMiB, seededRandom, parseSeed, createSuccession,
     rollComposition, formatMix, parseMix, stripsPreset, loopGain, audioStream,
+    ROLL_VERSION, rollCounts, parseRollVersion,
     libraryClips, chooseClips, rollLibrary, LIBRARY_CACHE,
     effectSettingsFromSearch, effectSettingsSearch,
     BUILTINS: BUILTINS.map(item => ({name: item.name, frames: item.frames})),
@@ -759,6 +795,11 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   let lastRefusals = [], busy = 0, recordMode = 'pending', builtinRecording = null, previewClock = null;
   const liveVoices = new Map();
   let liveVoiceClock = null;
+  // Which counts a seed's roll draws from: a link without ?rv keeps its original roll (see ROLL_VERSION).
+  let rollVersion = parseRollVersion(search);
+  // The version of a roll that has been drawn but not yet accepted: rollVersion (what the URL names) only
+  // changes once that roll is on screen, so a refused shuffle leaves the previous composition's link intact.
+  let pendingRollVersion = null;
   let ecosystem = new root.SimvltaneaEcosystem.Engine({seed: parseSeed(search) ?? 1});
   let succession = createSuccession(parseSeed(search) ?? 1), pendingSelection = false;
   const residentModels = new WeakMap(), residents = [];
@@ -1210,7 +1251,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
 
   /* Compile layout/export metadata, then reconcile residents in place. The live
    * session owns native loops; editing metadata never restarts its global clock. */
-  async function launch({atLoopBoundary = false, shareMix} = {}) {
+  async function launch({atLoopBoundary = false, shareMix, repair = null} = {}) {
     const bounded = boundedSelection(selection);
     if (bounded !== selection) { selection = bounded; renderControls(); }
     const token = ++launches, r = runtime(), requested = selection, sourcePool = pool();
@@ -1234,11 +1275,13 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       // A compiler/admission refusal may leave the previous accepted cohort
       // entirely intact. Restore its metadata, never a superseding user intent.
       if (!published && previousCurrent) {
+        pendingRollVersion = null;
         selection = residentSelection(session.selection, [...session.byTrack.values()], sourcePool);
         writeUrl(session.mix);
         renderControls();
       } else if (!published && ownsCohort(settledCohort)) {
         // Even if export compilation fails, describe the actual mixed field.
+        if (pendingRollVersion) { rollVersion = pendingRollVersion; pendingRollVersion = null; }
         selection = residentSelection(requested, settledCohort.cohort.map(({item}) => item), sourcePool);
         writeUrl(formatMix(selection.family, selection.loops));
         renderControls();
@@ -1265,14 +1308,14 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
         // its export waiters pending, just as for a library fetch below.
         await builtinRecording;
         if (!ownsIntent()) return false;
-        if (itemsReady(items)) return launch({atLoopBoundary, shareMix});
+        if (itemsReady(items)) return launch({atLoopBoundary, shareMix, repair});
       } else if (usingLibrary() && items.length) {
         const ok = await loadClips(items);
         if (token !== launches) return false;
         // A local import can change pools while this library fetch is pending.
         // Its completed batch owns the next launch, never the partial pool.
         if (pool() !== sourcePool) { finish(); return false; }
-        if (ok) return launch({atLoopBoundary, shareMix});
+        if (ok) return launch({atLoopBoundary, shareMix, repair});
         repairSelection();
       }
       finish();
@@ -1294,7 +1337,12 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       if (!ownsIntent()) return false;
       const reordered = admission.some((item, index) => item !== items[index]);
       r.setSound({enabled: wantSound(), volume: sound.volume});
-      const completed = await r.reconcile({plan, items: admission, playing: !hold && !paused, atLoopBoundary});
+      const submitted = r.reconcile({plan, items: admission, playing: !hold && !paused, atLoopBoundary});
+      const submittedRevision = r.revision;
+      const completed = await submitted;
+      // Only this request's own deferrals: an earlier request can still record
+      // one late, and a failure of this request must not inherit it.
+      const deferredSlots = new Set(r.lastDeferral?.revision === submittedRevision ? r.lastDeferral.slots : []);
       if (!ownsIntent()) return false;
       const revision = r.revision;
       const cohort = plan.tracks.map(track => {
@@ -1319,6 +1367,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
         bySha: new Map(actualItems.map(item => [item.sha256, item])),
         byTrack: new Map(cohort.map(({id, item}) => [id, item]))};
       selection = acceptedSelection;
+      if (pendingRollVersion) { rollVersion = pendingRollVersion; pendingRollVersion = null; }
       promoteAudioPlan(); refreshVoiceClock();
       if (shareMix !== undefined || changed || reordered)
         writeUrl(shareMix || changed || reordered ? formatMix(selection.family, selection.loops) : null);
@@ -1327,6 +1376,10 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       renderControls();
       if (r.ready) studio.dataset.phase = 'playing';
       if (usingLibrary()) prefetchNext();
+      // A deferral keeps the exact old variant, and nothing else would revisit
+      // it. A loop-mode toggle re-attempts the handoff a bounded number of times.
+      if (repair?.attempts > 0 && !completed && changed && deferredSlots.size)
+        scheduleLoopModeRepair(selection, repair.attempts, actualItems, deferredSlots);
       return completed;
     } catch (error) {
       if (token === launches && error.name !== 'AbortError') toast(oneLine(error.message || error));
@@ -1334,6 +1387,42 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     } finally {
       finish();
     }
+  }
+  // The toggle's own handoff can be deferred when the incoming clip never
+  // presented fresh frames in time (a starved page). The studio then describes
+  // the exact mixed field, which is correct, but nothing would revisit it and
+  // the field would stay mixed until the next edit. Re-attempt after one outgoing
+  // loop (frames that were not ready then usually are now), at most
+  // LOOP_MODE_REPAIR_ATTEMPTS times, and only after a genuine readiness deferral
+  // (a decode or playback error is not transient and is not retried). The attempt
+  // lapses once any edit replaces the selection; a deferral past the bound keeps
+  // today's mixed outcome.
+  const LOOP_MODE_REPAIR_ATTEMPTS = 2;
+  let repairTimer = null;
+  function scheduleLoopModeRepair(owner, attempts, resident, deferredSlots) {
+    clearTimeout(repairTimer);
+    const delayMs = repairDelayMs(resident);
+    const attempt = () => {
+      repairTimer = null;
+      // Keyed to the user intent, not to the selection object or launch counter:
+      // a playback-only relaunch (resume, repair) republishes the same intent and
+      // must not cancel the repair, while any edit changes it and does.
+      if (!sameIntent(selection, owner)) return;
+      // Paused, held or hidden pages cannot present fresh frames: wait, without
+      // spending an attempt, until the studio is running again.
+      if (document.hidden || hold || paused) { repairTimer = setTimeout(attempt, delayMs); return; }
+      // Only slots whose own handoff was deferred: a sibling that failed to
+      // decode or play is not transient and is left alone.
+      const stale = [...(selection.retained || [])].filter(([slot, item]) =>
+        deferredSlots.has(`loop-${slot + 1}`) && item.clip && item.asset && item.asset.id !== assetFor(item).id);
+      if (!stale.length) return;
+      const retained = new Map(selection.retained);
+      for (const [slot] of stale) retained.delete(slot);
+      selection = {...selection, retained};
+      runtime()?.record('handoff-reattempt', null, {slots: stale.map(([slot]) => slot), remaining: attempts - 1});
+      launch({shareMix: true, repair: {attempts: attempts - 1}});
+    };
+    repairTimer = setTimeout(attempt, delayMs);
   }
   function guardAll() { const r = runtime(); if (r) for (const node of r.nodes.values()) guardMute(node.media); }
 
@@ -1343,10 +1432,17 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     if (!root.history || !history.replaceState || !selection) return;
     const params = new URLSearchParams(root.location.search);
     params.set('seed', String(selection.seed));
+    params.delete('rv');
     if (mix && !own.length && selection.loops.every(Number.isInteger) &&
         new Set(selection.loops).size === selection.loops.length) params.set('mix', mix);
     else params.delete('mix');
-    history.replaceState(null, '', `${root.location.pathname}?${params}`);
+    // ?rv sits right after ?seed: the two together name a roll.
+    const ordered = new URLSearchParams();
+    for (const [key, value] of params) {
+      ordered.append(key, value);
+      if (key === 'seed' && rollVersion >= 2) ordered.append('rv', String(rollVersion));
+    }
+    history.replaceState(null, '', `${root.location.pathname}?${ordered}`);
   }
   function freshSeed() {
     const value = new Uint32Array(1);
@@ -1354,10 +1450,10 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     return value[0];
   }
 
-  const rollFor = seed => (usingLibrary() ?
-    rollLibrary(seed, familyCounts(), library.clips, [...library.broken]) :
-    rollComposition(seed, familyCounts(), pool().length));
-  // A shuffle takes the seed whose clips were prefetched, when there is one.
+  const rollFor = (seed, version = rollVersion) => (usingLibrary() ?
+    rollLibrary(seed, familyCounts(), library.clips, [...library.broken], version) :
+    rollComposition(seed, familyCounts(), pool().length, version));
+  // A shuffle takes the seed whose clips were prefetched, when there is one. A fresh seed is a current roll.
   function nextSeed() {
     const seed = library.next ?? freshSeed();
     library.next = null;
@@ -1373,19 +1469,28 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       random).slice(0, count);
   }
 
-  function roll(seed = nextSeed()) {
-    let rolled = rollFor(seed);
+  // A shuffle (no seed given) is a fresh draw and therefore a current roll; an explicit seed replays
+  // under the version its link named.
+  function roll(seed) {
+    const fresh = seed === undefined, version = fresh ? ROLL_VERSION : rollVersion;
+    if (fresh) seed = nextSeed();
+    let rolled = rollFor(seed, version);
     if (!rolled) { toast('Add one more video to play.'); return; }
+    pendingRollVersion = version;
     if (manualPopulation && selection) {
       const count = selection.loops.length;
       const family = layout.families[rolled.family].counts.includes(count) ? rolled.family : selection.family;
       rolled = {...rolled, family, loops: moreLoops([], count, family)};
     }
     selection = rolled;
+    // A user edit owns the field: a pending repair must not outlive it, even if
+    // the edit is refused or reverted and the intent happens to match again.
+    clearTimeout(repairTimer); repairTimer = null;
     renderControls();
     launch({shareMix: manualPopulation});
   }
   function edited() {
+    clearTimeout(repairTimer); repairTimer = null;
     renderControls();
     launch({shareMix: true});
   }
@@ -1585,11 +1690,13 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       const finish = result => {
         clearTimeout(timer);
         video.onloadeddata = video.onerror = null;
+        // Stamp before load() begins the native cancellation (see Session.unload).
+        const retiringAt = performance.now();
         video.pause();
         video.removeAttribute('src');
         video.load();
         if (live.proof) live.record('resource-retired', null, {role: 'metadata', url,
-          currentSrc: video.currentSrc, readyState: video.readyState, paused: video.paused});
+          currentSrc: video.currentSrc, readyState: video.readyState, paused: video.paused, wall: retiringAt});
         URL.revokeObjectURL(url);
         resolve(result);
       };
@@ -1705,6 +1812,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
         if (count !== null) {
           selection = {seed: freshSeed(), family, loops: own.map((_, index) => index).slice(-count),
             style: selection ? selection.style : {z1: '2', jitter: '0', reverse: false}};
+          pendingRollVersion = ROLL_VERSION;
           writeUrl(null);
           launch();
         }
@@ -1869,6 +1977,9 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     library.prefetch = [];
     library.next = null;
     recordMode = 'pending';
+    // A link keeps the roll version it names; only a page that had no roll yet draws a current one.
+    pendingRollVersion = null;
+    if (!selection) rollVersion = ROLL_VERSION;
     selection = rollFor(selection ? selection.seed : freshSeed());
     writeUrl(null);
     renderControls();
@@ -1884,7 +1995,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   function prefetchNext() {
     if (!usingLibrary() || (root.navigator && navigator.connection && navigator.connection.saveData)) return;
     if (library.next === null) library.next = freshSeed();
-    const rolled = rollFor(library.next);
+    const rolled = rollFor(library.next, ROLL_VERSION);
     if (!rolled) return;
     const items = rolled.loops.map(index => library.items[index]);
     if (items.reduce((sum, item) => sum + (item.sha256 ? 0 : item.clip.bytes), 0) > PREFETCH_BYTES) return;
@@ -2059,6 +2170,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     ui.filterTune.setAttribute('aria-expanded', 'false'); ui.filterTune.focus(); wake();
   });
   ui.loopMode.addEventListener('click', () => {
+    clearTimeout(repairTimer);
     loopMode = loopMode === 'boomerang' ? 'forward' : 'boomerang';
     for (const job of library.inflight.values()) job.controller.abort();
     library.inflight.clear(); library.cache.clear(); library.broken.clear(); library.prefetch = []; library.next = null;
@@ -2066,7 +2178,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     if (selection) selection = {...selection, retained: new Map()};
     const params = new URLSearchParams(root.location.search); params.set('loop', loopMode);
     history.replaceState(null, '', `${root.location.pathname}?${params}`);
-    renderActivity(); launch({shareMix: true});
+    renderActivity(); launch({shareMix: true, repair: {attempts: LOOP_MODE_REPAIR_ATTEMPTS}});
   });
 
   // ---- Controls -------------------------------------------------------------------

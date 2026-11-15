@@ -8,6 +8,7 @@ from pathlib import Path
 import unittest
 
 from simvltanea.browser.test_browser_runtime import browser_executable
+from simvltanea.browser.silent_browser import silent_launch
 
 
 AUDIO_JS = Path(__file__).with_name('browser.audio.js')
@@ -19,7 +20,7 @@ class LiveAudioTests(unittest.TestCase):
     def setUpClass(cls):
         from playwright.sync_api import sync_playwright
         cls.playwright = sync_playwright().start()
-        cls.browser = cls.playwright.chromium.launch(
+        cls.browser = silent_launch(cls.playwright.chromium, 
             executable_path=browser_executable(), headless=True,
             args=['--no-sandbox'])
 

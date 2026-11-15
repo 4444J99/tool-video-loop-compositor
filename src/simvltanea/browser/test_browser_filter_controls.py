@@ -5,10 +5,11 @@ import hashlib
 import json
 import mimetypes
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import time
 import unittest
 from urllib.parse import urlparse
+from simvltanea.browser.silent_browser import silent_launch
 
 HERE = Path(__file__).parent
 
@@ -30,7 +31,7 @@ const S=require(process.argv[1] + '/browser.studio.js');
 const supported=typeof S.effectSettingsFromSearch==='function' && typeof S.effectSettingsSearch==='function';
 if(!supported){console.log(JSON.stringify({supported}));process.exit(0);}
 """ + body
-    result = subprocess.run(['node', '-e', script, str(HERE)], capture_output=True,
+    result = retry.run(['node', '-e', script, str(HERE)], capture_output=True,
                             text=True, timeout=20, check=True)
     return json.loads(result.stdout)
 
@@ -96,7 +97,7 @@ class FilterControlsBrowserTests(unittest.TestCase):
         cls.files['library/manifest.json'] = json.dumps({'schema': 'simvltanea.public-demo/1', 'clips': clips}).encode()
         cls.files.update(cls.media)
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=browser_executable(), headless=True,
                                             args=['--no-sandbox', '--disable-dev-shm-usage'])
 
     @classmethod

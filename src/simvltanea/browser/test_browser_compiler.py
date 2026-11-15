@@ -34,7 +34,7 @@ import json
 import math
 import os
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -182,7 +182,7 @@ def wire(value):
 
 
 def node(*calls) -> list[dict]:
-    completed = subprocess.run([node_executable(), '-e', DRIVER, str(COMPILER)],
+    completed = retry.run([node_executable(), '-e', DRIVER, str(COMPILER)],
                                input=json.dumps(wire(list(calls))), capture_output=True,
                                text=True, check=True, timeout=300)
     return json.loads(completed.stdout)
@@ -220,7 +220,7 @@ process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
 
 
 def node_layout_files(items) -> list[dict]:
-    completed = subprocess.run([node_executable(), '-e', LAYOUT_DRIVER, str(COMPILER)],
+    completed = retry.run([node_executable(), '-e', LAYOUT_DRIVER, str(COMPILER)],
                                input=json.dumps([[str(path), name] for path, name in items]),
                                capture_output=True, text=True, check=True, timeout=300)
     return json.loads(completed.stdout)
@@ -268,7 +268,7 @@ def strips_state(count: int, slice_value='strips', *, preset='strips', fps: int 
 
 
 def node_inheritance(state: dict) -> dict:
-    completed = subprocess.run([node_executable(), '-e', INHERITANCE_DRIVER, str(COMPILER)],
+    completed = retry.run([node_executable(), '-e', INHERITANCE_DRIVER, str(COMPILER)],
                                input=json.dumps(state), capture_output=True, text=True, check=True, timeout=300)
     return json.loads(completed.stdout)
 
@@ -660,7 +660,7 @@ class LoopCountTests(unittest.TestCase):
     def test_supported_counts_are_one_to_twelve(self):
         script = 'const C = require(process.argv[1]); process.stdout.write(JSON.stringify(' \
                  '[C.SUPPORTED_LOOP_COUNTS, C.MIN_LOOPS, C.MAX_LOOPS, Object.isFrozen(C.SUPPORTED_LOOP_COUNTS)]))'
-        completed = subprocess.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
+        completed = retry.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
                                    check=True, timeout=60)
         self.assertEqual(json.loads(completed.stdout), [list(range(1, 13)), 1, 12, True])
 
@@ -826,7 +826,7 @@ class StripsExpansionParityTests(unittest.TestCase):
 
     def test_default_preset_data_is_python_data(self):
         script = 'const C = require(process.argv[1]); process.stdout.write(C.canonicalJson(C.DEFAULT_STRIPS_PRESET))'
-        completed = subprocess.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
+        completed = retry.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
                                    check=True, timeout=60)
         self.assertEqual(completed.stdout, c.canonical_json(DEFAULT_STRIPS_PRESET))
 
@@ -1132,8 +1132,8 @@ class LayoutBundleTests(unittest.TestCase):
     def test_bundle_is_derived_from_authored_geometry(self):
         bundle = authored_layout_bundle()
         self.assertEqual(list(bundle), [str(count) for count in BUNDLE_AUTHORED_COUNTS])
-        self.assertEqual(list(bundle), ['2', '3', '4', '5', '6', '7'])
-        self.assertEqual(sorted(AUTHORED), list(range(2, 13)), 'authored counts 8..12 exist but are not bundled')
+        self.assertEqual(list(bundle), [str(count) for count in range(2, 13)])
+        self.assertEqual(sorted(AUTHORED), list(range(2, 13)))
         for count, pair in bundle.items():
             for orientation in c.ORIENTATIONS:
                 with self.subTest(count=count, orientation=orientation):
@@ -1151,20 +1151,23 @@ class LayoutBundleTests(unittest.TestCase):
     def run_module(self, *arguments: str) -> bytes:
         src = Path(__file__).resolve().parents[2]
         env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(src), str(src.parent)]))
-        return subprocess.run([sys.executable, '-m', 'simvltanea.browser.layout_bundle', *arguments], env=env,
+        return retry.run([sys.executable, '-m', 'simvltanea.browser.layout_bundle', *arguments], env=env,
                               capture_output=True, check=True, timeout=120).stdout
 
     def test_module_entry_prints_the_bundle(self):
         output = self.run_module()
         self.assertEqual(json.loads(output), authored_layout_bundle())
 
-    def test_default_output_is_the_legacy_bundle_byte_for_byte(self):
-        """No flag (and --format 1) keeps the pre-v2 bytes; the digest was taken before v2 existed."""
+    def test_default_output_keeps_the_legacy_bytes_for_counts_two_to_seven(self):
+        """No flag (and --format 1) prints the legacy map. Counts 2..7 are byte for byte what they were
+        before v2 existed (the digest was taken then), re-serialised without the later counts."""
         for arguments in ((), ('--format', '1')):
             with self.subTest(arguments=arguments):
                 output = self.run_module(*arguments)
-                self.assertEqual(hashlib.sha256(output).hexdigest(), LEGACY_BUNDLE_SHA256)
                 self.assertEqual(output, (render_bundle(1) + '\n').encode())
+                legacy = {count: pair for count, pair in json.loads(output).items() if int(count) <= 7}
+                text = json.dumps(legacy, indent=2, ensure_ascii=False) + '\n'
+                self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), LEGACY_BUNDLE_SHA256)
 
     def test_format_two_has_the_specified_shape(self):
         output = self.run_module('--format', '2')
@@ -1176,7 +1179,7 @@ class LayoutBundleTests(unittest.TestCase):
         self.assertEqual(list(bundle['families']), ['authored', 'strips'])
         authored, strips = bundle['families']['authored'], bundle['families']['strips']
         self.assertEqual(authored, {'counts': authored_layout_bundle()})
-        self.assertEqual(list(authored['counts']), [str(n) for n in range(2, 8)])
+        self.assertEqual(list(authored['counts']), [str(n) for n in range(2, 13)])
         self.assertEqual(strips['preset'], {'format': 'simvltanea.layout-preset/1', 'name': 'strips'})
         self.assertEqual(list(strips['counts']), [str(n) for n in range(1, 13)])
         for count, entry in strips['counts'].items():
@@ -1199,14 +1202,14 @@ class LayoutBundleTests(unittest.TestCase):
         broken['families']['strips']['counts']['13'] = broken['families']['strips']['counts']['12']
         results = node(['layoutFamilies', legacy], ['layoutFamilies', v2],
                        ['layoutEntry', legacy, 'authored', 3], ['layoutEntry', v2, 'authored', 3],
-                       ['layoutEntry', v2, 'strips', 5], ['layoutEntry', v2, 'authored', 8],
+                       ['layoutEntry', v2, 'strips', 5], ['layoutEntry', v2, 'authored', 13],
                        ['layoutEntry', v2, 'strips', 13], ['layoutEntry', legacy, 'strips', 5],
                        ['layoutFamilies', broken], ['layoutFamilies', dict(v2, format='simvltanea.layout-bundle/3')],
                        ['layoutFamilies', dict(v2, default_family='grid')])
         self.assertEqual(results[0]['value'], {'format': 'simvltanea.layout-bundle/1', 'default_family': 'authored',
-                                               'families': {'authored': {'counts': list(range(2, 8)), 'preset': None}}})
+                                               'families': {'authored': {'counts': list(range(2, 13)), 'preset': None}}})
         self.assertEqual(results[1]['value'], {'format': 'simvltanea.layout-bundle/2', 'default_family': 'strips',
-                                               'families': {'authored': {'counts': list(range(2, 8)), 'preset': None},
+                                               'families': {'authored': {'counts': list(range(2, 13)), 'preset': None},
                                                             'strips': {'counts': list(range(1, 13)),
                                                                        'preset': v2['families']['strips']['preset']}}})
         self.assertEqual(results[2]['value'], {'layouts': legacy['3'], 'slice': None, 'adjacency': None})
@@ -1214,7 +1217,7 @@ class LayoutBundleTests(unittest.TestCase):
         entry = strips_entry(5)
         self.assertEqual(results[4]['value'], {'layouts': {'portrait': entry['portrait'], 'landscape': entry['landscape']},
                                                'slice': entry['slice'], 'adjacency': entry['adjacency']})
-        for result, pattern in zip(results[5:], ('authored family has no layout for 8 loops; it covers 2, 3, 4, 5, 6, 7',
+        for result, pattern in zip(results[5:], ('authored family has no layout for 13 loops; it covers 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12',
                                                   'strips family has no layout for 13 loops',
                                                   'no family "strips"', 'count 13; the browser compiler covers N=1..12',
                                                   'format must be simvltanea.layout-bundle/2', 'default_family')):
@@ -1463,7 +1466,7 @@ class PlayStateCompilerTests(unittest.TestCase):
         state = out['state']
         self.assertEqual(state['frames'], 14400)
         self.assertGreater(len(state['events']), 25000)
-        completed = subprocess.run([node_executable(), '-e', TIMED_DRIVER, str(COMPILER)], input=json.dumps(state),
+        completed = retry.run([node_executable(), '-e', TIMED_DRIVER, str(COMPILER)], input=json.dumps(state),
                                    capture_output=True, text=True, check=True, timeout=300)
         result = json.loads(completed.stdout)
         self.assertLess(result['seconds'], LARGE_STATE_SECONDS,

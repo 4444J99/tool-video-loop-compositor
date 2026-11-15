@@ -1,6 +1,6 @@
 """Retained resident overrides follow logical slots through selection repair."""
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -17,7 +17,7 @@ const repair=extract('  function repairSelection()', '\n  function fallbackToGen
 const bounded=extract('  function boundedSelection(', '\n  // ---- Toast');
 const selected=extract('  const selectedItems =', '\n  const itemsReady');
 ''' + body
-        result = subprocess.run(['node', '-e', script, str(STUDIO)], capture_output=True, text=True)
+        result = retry.run(['node', '-e', script, str(STUDIO)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('complete', result.stdout)
 

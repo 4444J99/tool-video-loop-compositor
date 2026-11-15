@@ -4,12 +4,13 @@ from __future__ import annotations
 import base64
 import io
 import json
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 from pathlib import Path
 
 from simvltanea.browser.test_browser_runtime import browser_executable
 from simvltanea.browser.test_browser_studio import ffmpeg, prepare_fixtures
+from simvltanea.browser.silent_browser import silent_launch
 
 HERE = Path(__file__).parent
 LIVE = HERE / 'browser.live.js'
@@ -38,7 +39,7 @@ session.setPresence('one',1);const peak={gain:gain.value,filter:style.filter,fre
 session.setEffects(false);const bypass={gain:gain.value,filter:style.filter,type:deck.binding.filter.type};
 process.stdout.write(JSON.stringify({supported,quiet,peak,bypass}));
 '''
-        result = subprocess.run(['node', '-e', script, str(LIVE), str(HERE / 'browser.presence.js')],
+        result = retry.run(['node', '-e', script, str(LIVE), str(HERE / 'browser.presence.js')],
                                 check=True, capture_output=True, text=True)
         values = json.loads(result.stdout)
         self.assertTrue(values['supported'], 'live presence controls have not been implemented')
@@ -59,7 +60,7 @@ const environments = [
 ];
 process.stdout.write(JSON.stringify(api.foregroundLimit ? environments.map(api.foregroundLimit) : []));
 '''
-        result = subprocess.run(['node', '-e', script, str(LIVE)], check=True, capture_output=True, text=True)
+        result = retry.run(['node', '-e', script, str(LIVE)], check=True, capture_output=True, text=True)
         self.assertEqual(json.loads(result.stdout), [4, 4, 4, 12])
 
     def test_clock_freezes_pause_and_ignores_background_catchup(self):
@@ -72,7 +73,7 @@ const before = clock.simTime; clock.pause(); clock.tick(9999);
 const paused = clock.simTime; clock.start(); clock.tick(10000); clock.tick(10020);
 process.stdout.write(JSON.stringify({before, paused, after: clock.simTime}));
 '''
-        result = subprocess.run(['node', '-e', script, str(LIVE)], check=True, capture_output=True, text=True)
+        result = retry.run(['node', '-e', script, str(LIVE)], check=True, capture_output=True, text=True)
         values = json.loads(result.stdout)
         self.assertAlmostEqual(values['before'], .13)
         self.assertEqual(values['paused'], values['before'])
@@ -96,7 +97,7 @@ setTimeout(() => {
   process.stdout.write(JSON.stringify({before, early, during, after: cadence.starved(), holders: cadence.holders}));
 }, wait);
 '''
-        result = subprocess.run(['node', '-e', script, str(LIVE), str(frame_gap_ms), str(wait_ms)],
+        result = retry.run(['node', '-e', script, str(LIVE), str(frame_gap_ms), str(wait_ms)],
                                 check=True, capture_output=True, text=True)
         return json.loads(result.stdout)
 
@@ -123,7 +124,7 @@ setTimeout(() => {
   process.stdout.write(JSON.stringify({healthy, hidden}));
 }, 1050);
 '''
-        result = subprocess.run(['node', '-e', script, str(LIVE)], check=True, capture_output=True, text=True)
+        result = retry.run(['node', '-e', script, str(LIVE)], check=True, capture_output=True, text=True)
         # An average since the hold began would still read about 25 frames a second at 1050 ms.
         self.assertEqual(json.loads(result.stdout), dict(healthy=False, hidden=True))
 
@@ -134,7 +135,7 @@ class PersistentSessionTests(unittest.TestCase):
         from playwright.sync_api import sync_playwright
         cls.fixtures = prepare_fixtures()
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=browser_executable(), headless=True,
                                            args=['--no-sandbox', '--disable-dev-shm-usage'])
 
     @classmethod

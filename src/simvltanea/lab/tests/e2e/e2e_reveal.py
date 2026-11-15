@@ -76,7 +76,15 @@ def test_actions_video_both_and_toggles(lab, clips):
     lab.page.locator('.panel[data-panel="0"]').click(position={"x": 8, "y": 8})
     lab.page.wait_for_selector(".reveal img.reveal-still")
     assert lab.page.locator(".reveal video.reveal-video.inset").count() == 1
-    assert lab.page.locator(".reveal .chip").count() > 0
+    # Panel 0 rotates through the pool, and the fixture deliberately leaves some
+    # clips untagged, so the clip that opened decides whether chips can exist.
+    shown = clips[lab.page.locator(".reveal img.reveal-still").get_attribute("data-clip")]
+    tags = shown.get("tags") or {}
+    expect_chips = any(isinstance(v, list) and any(isinstance(x, str) for x in v)
+                       for v in (tags.get(k) for k in ("subjects", "mood", "palette"))) or any(
+        isinstance(tags.get(k), str) and tags[k] != "unclear"
+        for k in ("environment", "setting", "time_of_day", "shot", "camera", "motion_level"))
+    assert (lab.page.locator(".reveal .chip").count() > 0) == expect_chips
     assert lab.page.locator(".reveal-date").count() == 0
 
 

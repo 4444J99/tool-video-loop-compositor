@@ -4,14 +4,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 HARNESS = Path(__file__).with_name('diagnose_webkit_wrap_plateau.js')
 
 
 def execute(body):
-    result = subprocess.run(
+    result = retry.run(
         [shutil.which('node') or 'node', '-e',
          'const harness=require(process.argv[1]);\n' + body, str(HARNESS)],
         capture_output=True, text=True, check=True, timeout=15)

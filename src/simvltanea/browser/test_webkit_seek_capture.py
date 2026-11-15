@@ -1,6 +1,6 @@
 """Native diagnostic observations stay together across asynchronous journaling."""
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -89,7 +89,7 @@ fixture.prepare=()=>api.prepare(fixture.page,{sample:sampleFixture,pause:async()
 
 class AtomicSeekCaptureTests(unittest.TestCase):
     def run_node(self, body):
-        result = subprocess.run(['node', '-e', FIXTURE + body, str(ADAPTER)],
+        result = retry.run(['node', '-e', FIXTURE + body, str(ADAPTER)],
                                 text=True, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

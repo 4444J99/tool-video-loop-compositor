@@ -12,7 +12,7 @@ import json
 import os
 import shutil
 import stat
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -41,12 +41,12 @@ TEN_BIT = "ten-bit.mkv"
 
 
 def ffmpeg(*arguments: str) -> None:
-    subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *arguments],
+    retry.run(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *arguments],
                    check=True, capture_output=True, text=True)
 
 
 def probe(path: Path) -> dict:
-    completed = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json",
+    completed = retry.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json",
                                 str(path)], check=True, capture_output=True, text=True)
     return json.loads(completed.stdout)
 
@@ -63,7 +63,7 @@ def rotation_of(stream: dict) -> float | None:
 
 
 def packet_times(path: Path) -> list[float]:
-    completed = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+    completed = retry.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                                 "packet=pts_time", "-of", "csv=p=0", str(path)],
                                check=True, capture_output=True, text=True)
     return sorted(float(line.strip(",")) for line in completed.stdout.split() if line.strip(","))
@@ -164,7 +164,7 @@ def raw_luma(video: Path, points: list[tuple[float, float]]) -> list[int]:
     """Stored Y samples of the first frame, read without any range conversion."""
     stream = video_stream(probe(video))
     width, height = int(stream["width"]), int(stream["height"])
-    completed = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-noautorotate",
+    completed = retry.run(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-noautorotate",
                                 "-i", str(video),
                                 "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", stream["pix_fmt"], "-"],
                                check=True, capture_output=True)
@@ -215,7 +215,7 @@ class ProxyCommandTests(unittest.TestCase):
         env.update(PYTHONPATH=str(SOURCE_ROOT), SIMVLTANEA_ROOT=str(cls.workspace))
         if path is not None:
             env["PATH"] = str(path)
-        return subprocess.run([sys.executable, "-m", "independent_loop_compositor", *arguments],
+        return retry.run([sys.executable, "-m", "independent_loop_compositor", *arguments],
                               cwd=cwd or cls.workspace, env=env, text=True, capture_output=True, timeout=600)
 
     def assertFriendly(self, result, *fragments):

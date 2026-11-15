@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 from simvltanea.browser.layout_bundle import layout_bundle_v2
@@ -44,7 +44,7 @@ class EffectsLabPanelParityTests(unittest.TestCase):
         ]
 
     def evaluate(self, layouts):
-        result = subprocess.run(
+        result = retry.run(
             [NODE, '-e', DRIVER, str(HERE / 'browser.compiler.js'),
              str(HERE / 'browser.lab_model.js')],
             input=json.dumps(dict(bundle=self.bundle, layouts=layouts)),

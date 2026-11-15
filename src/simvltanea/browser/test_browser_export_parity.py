@@ -36,7 +36,7 @@ import http.server
 import io
 import json
 import math
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import threading
 import unittest
@@ -49,6 +49,7 @@ import simvltanea.authoring.composition as c
 from simvltanea.browser.browser_runtime import build_preview
 from simvltanea.browser.test_browser_runtime import browser_executable
 from simvltanea.generators.make_runtime_fixture import RAMP_SIZE, ROOT, prepare, ramp_row, ramp_tint
+from simvltanea.browser.silent_browser import silent_launch
 
 REPO = Path(__file__).resolve().parents[3]
 COUNTS = (1, 5, 12)
@@ -92,7 +93,7 @@ class ExportReader:
     """
 
     def __init__(self, path: Path, width: int, height: int):
-        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), '-frames:v', '1', '-f', 'rawvideo',
+        raw = retry.run(['ffmpeg', '-v', 'error', '-i', str(path), '-frames:v', '1', '-f', 'rawvideo',
                               '-pix_fmt', 'yuv444p', '-'], capture_output=True, check=True).stdout
         size = width * height
         if len(raw) != 3 * size:
@@ -352,7 +353,7 @@ class BrowserExportParityTests(unittest.TestCase):
         cls.thread.start()
         cls.base = f'http://127.0.0.1:{cls.server.server_port}'
         cls.playwright = sync_playwright().start()
-        cls.browser = cls.playwright.chromium.launch(
+        cls.browser = silent_launch(cls.playwright.chromium, 
             executable_path=browser_executable(), headless=True,
             args=['--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required'])
         cls.measured = {}
@@ -407,7 +408,7 @@ class BrowserExportParityTests(unittest.TestCase):
         command = [sys.executable, '-m', 'simvltanea.rendering.render_triptych', '--state', str(case['export']),
                    '--orientation', orientation, '--width', str(width), '--height', str(height),
                    '--preset', 'ultrafast', '--output', str(output)]
-        done = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
+        done = retry.run(command, cwd=REPO, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr[-4000:])
         return output
 

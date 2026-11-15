@@ -683,7 +683,7 @@ function applySlice(node) {
       this.controller?.abort();
       if (this.pending) this.pending.resolve(false);
       const promise = new Promise(resolve => {
-        this.pending = {plan, items, playing, atLoopBoundary, revision: this.revision, resolve};
+        this.pending = {plan, items, playing, atLoopBoundary, revision: this.revision, resolve, deferred: new Set()};
       });
       if (!this.draining) this.drain();
       return promise;
@@ -693,6 +693,7 @@ function applySlice(node) {
       try {
         while (this.pending && !this.disposed) {
           const request = this.pending; this.pending = null;
+          request.deferred ??= new Set();
           const controller = this.controller = new AbortController();
           let success = true;
           try {
@@ -716,7 +717,8 @@ function applySlice(node) {
                   if (error.name === 'AbortError') throw error;
                   success = false;
                   if (error instanceof DeferredHandoffError)
-                    this.record('handoff-deferred', node.id, {reason: error.message, ...error.detail});
+                    { request.deferred.add(node.id);
+                      this.record('handoff-deferred', node.id, {reason: error.message, ...error.detail}); }
                   else this.report(error, node);
                 }
               } else {
@@ -740,6 +742,9 @@ function applySlice(node) {
             success = false; this.report(error);
           } finally {
             if (this.controller === controller) this.controller = null;
+            // Which slots THIS request deferred, keyed by its revision, so a caller
+            // never attributes an earlier request's late deferral to its own.
+            this.lastDeferral = {revision: request.revision, slots: [...request.deferred]};
             request.resolve(success && request.revision === this.revision);
           }
         }
@@ -1230,9 +1235,13 @@ function applySlice(node) {
             retiredAt: wall, nativeError: nativeError ? {code: nativeError.code, message: nativeError.message} : null});
           if (this.proofRetired.length > 16) this.proofRetired.shift();
         }
+        // load() starts the native cancellation of the blob read, and the runner can receive that failure before this
+        // function returns. Stamp the retirement before the cancel can begin so a cancelled read always follows it.
+        const retiringAt = performance.now();
         deck.media.pause(); deck.media.removeAttribute('src'); deck.media.load();
         if (this.proof) this.record('resource-retired', deck.media.dataset.loopId, {role: 'deck', url: deck.url,
-          currentSrc: deck.media.currentSrc, readyState: deck.media.readyState, paused: deck.media.paused});
+          currentSrc: deck.media.currentSrc, readyState: deck.media.readyState, paused: deck.media.paused,
+          wall: retiringAt});
         URL.revokeObjectURL(deck.url); deck.url = null;
       }
       deck.item = null;

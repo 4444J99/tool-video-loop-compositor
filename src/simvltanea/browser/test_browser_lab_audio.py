@@ -3,6 +3,7 @@ from pathlib import Path
 import unittest
 
 from simvltanea.browser.test_browser_runtime import browser_executable
+from simvltanea.browser.silent_browser import silent_launch
 
 HERE = Path(__file__).resolve().parent
 
@@ -12,7 +13,7 @@ class EffectsLabAudioTests(unittest.TestCase):
     def setUpClass(cls):
         from playwright.sync_api import sync_playwright
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=browser_executable(), headless=True,
                                             args=['--no-sandbox'])
 
     @classmethod

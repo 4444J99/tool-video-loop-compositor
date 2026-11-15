@@ -14,7 +14,7 @@ import functools
 import http.server
 import json
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import threading
 import unittest
 from fractions import Fraction
@@ -25,6 +25,7 @@ from unittest.mock import patch
 import simvltanea.authoring.composition as c
 from simvltanea.browser.browser_runtime import build_preview, compile_plan
 from simvltanea.generators.make_runtime_fixture import HERE, ROOT, prepare
+from simvltanea.browser.silent_browser import silent_launch
 
 
 def browser_executable() -> str:
@@ -273,7 +274,7 @@ class BrowserTests(unittest.TestCase):
         cls.thread=threading.Thread(target=cls.server.serve_forever,kwargs={'poll_interval':0.05},daemon=True);cls.thread.start()
         cls.pw=sync_playwright().start()
         executable=browser_executable()
-        cls.browser=cls.pw.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
+        cls.browser=silent_launch(cls.pw.chromium, executable_path=executable,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
         cls.base=f'http://127.0.0.1:{cls.server.server_port}'
         cls.transport=os.environ.get('PORTVS_BROWSER_TRANSPORT','http')
         if cls.transport not in ('http','in-memory'):raise ValueError('Unknown browser transport')
@@ -1120,7 +1121,7 @@ assert.notDeepEqual(seedA1.items.map(i => i.id), seedB.items.map(i => i.id));
 
 console.log(JSON.stringify({ok: true}));
 '''
-        result = subprocess.run(['node', '-e', script, str(runtime_js)],
+        result = retry.run(['node', '-e', script, str(runtime_js)],
                                 check=True, capture_output=True, text=True, timeout=15)
         self.assertTrue(json.loads(result.stdout).get('ok'))
 
@@ -1175,7 +1176,7 @@ assert.equal(props['--slice-x'], undefined);
 
 console.log(JSON.stringify({ok: true}));
 '''
-        result = subprocess.run(['node', '-e', script, str(runtime_js)],
+        result = retry.run(['node', '-e', script, str(runtime_js)],
                                 check=True, capture_output=True, text=True, timeout=15)
         self.assertTrue(json.loads(result.stdout).get('ok'))
 
@@ -1206,7 +1207,7 @@ node.span.slice_rect = ['0', '0', '1', '1'];
 applySlice(node);
 console.log(JSON.stringify([node.media.style.objectFit, node.media.style.objectPosition]));
 '''
-        result = subprocess.run(['node', '-e', script, str(HERE / 'browser.runtime.js')],
+        result = retry.run(['node', '-e', script, str(HERE / 'browser.runtime.js')],
                                 check=True, capture_output=True, text=True, timeout=15)
         self.assertEqual(json.loads(result.stdout), ['contain', '0% 100%'])
 
@@ -1225,7 +1226,7 @@ callback(1,{mediaTime:1,presentedFrames:1});
 assert.equal(node.callbacks,0);
 assert.equal(node.decoded,undefined);
 """
-        subprocess.run(['node','-e',script,str(HERE/'browser.runtime.js')],check=True,
+        retry.run(['node','-e',script,str(HERE/'browser.runtime.js')],check=True,
                        capture_output=True,text=True,timeout=15)
 
     def test_decimal_slice_arrays_render_and_malformed_arrays_fail(self):
@@ -1242,7 +1243,7 @@ for (const rect of ['[0,0,1]','[0,0,1,1,1]','[0,0,NaN,1]']) {
 }
 assert.throws(()=>vm.runInContext('number(.25)',ctx)); // compiled clocks remain strict
 """
-        subprocess.run(['node','-e',script,str(HERE/'browser.runtime.js')],check=True,
+        retry.run(['node','-e',script,str(HERE/'browser.runtime.js')],check=True,
                        capture_output=True,text=True,timeout=15)
 
 

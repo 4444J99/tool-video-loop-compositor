@@ -1,6 +1,6 @@
 """Diagnostic setup owns options before media admission and preserves real API boundaries."""
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -9,7 +9,7 @@ ADAPTER = Path(__file__).with_name('verify_webkit_seek_adapter.js')
 
 class SeekAdapterTests(unittest.TestCase):
     def run_node(self, body):
-        result = subprocess.run(['node', '-e', "const assert=require('node:assert/strict'); const api=require(process.argv[1]);\n" + body,
+        result = retry.run(['node', '-e', "const assert=require('node:assert/strict'); const api=require(process.argv[1]);\n" + body,
                                  str(ADAPTER)], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -141,6 +141,88 @@ class SeekAdapterTests(unittest.TestCase):
           event.strategy='seek-play';event.wall=5;
           assert.equal(api.interventions(result,[target]).attempts.length,0);
           assert.equal(api.interventions(result,[target]).pass,false);
+        """)
+
+    def test_in_page_recorder_keeps_only_unpaused_target_rows_at_its_own_cadence(self):
+        # Forced timing: the host never gets to poll (no protocol round trip happens between the ticks), yet every
+        # tick inside the crossfade is retained, so overlap evidence cannot depend on how slow the runner is.
+        self.run_node("""
+          let wall=1000, ticks=[];
+          Object.defineProperty(globalThis,'performance',{value:{now:()=>wall},configurable:true});
+          globalThis.document={hidden:false};
+          globalThis.setInterval=(fn,ms)=>{ticks.push({fn,ms});return ticks.length;};
+          globalThis.clearInterval=id=>{ticks[id-1].cleared=true;};
+          const deck=(item,paused,decoded)=>({item:item&&{name:item,sha256:'sha-'+item},paused,decoded,ready:4,callbacks:3,
+            media:{src:'blob:'+item,currentSrc:'blob:'+item,paused,readyState:4,hasAttribute:()=>true,error:null},
+            progress:{snapshot:()=>({sourceChanges:3,mediaTime:decoded,url:'blob:'+item})}});
+          const outgoing=deck('C',false,1), incoming=deck('E',true,0);
+          const owners=['loop-1','loop-2','loop-3','loop-4'].map(id=>({id,decks:[outgoing,incoming],active:outgoing,
+            item:{name:'C'},birthTime:0,box:{},source:{},residentIdentity:{},binding:{}}));
+          const nodes=new Map(owners.map(owner=>[owner.id,{...owner,phase:'READY',activeDeck:owner.active}]));
+          const node3=nodes.get('loop-3');node3.active=outgoing;node3.decks=[outgoing,incoming];node3.birthTime=0;
+          globalThis.compositionRuntime={nodes,slots:new Map(owners.map(o=>[o.id,o])),running:true,
+            audio:{context:{state:'running'}},maxForeground:4,activeStandbys:1,maxConcurrentStandbys:1};
+          globalThis.__seekCohort={remembered:new Map([...nodes].map(([id,n])=>[id,{node:n,box:n.box,decks:n.decks,
+            media:n.decks.map(d=>d.media),active:n.active,binding:n.binding,item:n.item,source:n.source,birth:0,
+            residentIdentity:n.residentIdentity}]))};
+          const install=api.installOverlapRecorder();
+          install({id:'E',sha256:'sha-E'});
+          assert.equal(ticks.length,1);assert.ok(ticks[0].ms<=50,'recorder cadence must not depend on the host');
+          const tick=()=>{wall+=25;ticks[0].fn();};
+          tick();tick();                       // parked standby: paused, not evidence
+          incoming.media.paused=false;incoming.paused=false;
+          for(let i=0;i<5;i++){incoming.decoded=i/10;tick();}
+          const other=deck('X',false,0);node3.decks=[outgoing,other];tick(); // a different incoming item is not kept
+          const {rows,dropped}=api.collectOverlapRecorder();
+          assert.equal(rows.length,5);assert.equal(dropped,0);
+          assert.deepEqual(rows.map(row=>row.wall),[1075,1100,1125,1150,1175]);
+          assert.ok(rows.every(row=>row.incoming.item==='E'&&row.incoming.paused===false));
+          assert.equal(ticks[0].cleared,true);assert.deepEqual(api.collectOverlapRecorder(),{rows:[],dropped:0});
+        """)
+
+    def test_recorder_keeps_the_newest_rows_and_reports_what_it_dropped(self):
+        self.run_node("""
+          let wall=0, ticks=[];
+          Object.defineProperty(globalThis,'performance',{value:{now:()=>wall},configurable:true});
+          globalThis.document={hidden:false};
+          globalThis.setInterval=(fn,ms)=>{ticks.push({fn,ms});return ticks.length;};
+          globalThis.clearInterval=()=>{};
+          const mk=(item,paused)=>({item:{name:item,sha256:'sha-'+item},paused,decoded:1,ready:4,callbacks:3,
+            media:{src:'blob:'+item,currentSrc:'blob:'+item,paused,readyState:4,hasAttribute:()=>true,error:null},
+            progress:{snapshot:()=>({sourceChanges:3,mediaTime:1,url:'blob:'+item})}});
+          const out=mk('C',false), inc=mk('E',false);
+          const owners=['loop-1','loop-2','loop-3','loop-4'].map(id=>({id,decks:[out,inc],active:out,item:{name:'C'},
+            birthTime:0,box:{},source:{},residentIdentity:{},binding:{},phase:'READY'}));
+          const nodes=new Map(owners.map(o=>[o.id,o]));
+          globalThis.compositionRuntime={nodes,slots:new Map(owners.map(o=>[o.id,o])),running:true,
+            audio:{context:{state:'running'}},maxForeground:4,activeStandbys:1,maxConcurrentStandbys:1};
+          globalThis.__seekCohort={remembered:new Map([...nodes].map(([id,n])=>[id,{node:n,box:n.box,decks:n.decks,
+            media:n.decks.map(d=>d.media),active:n.active,binding:n.binding,item:n.item,source:n.source,birth:0,
+            residentIdentity:n.residentIdentity}]))};
+          api.installOverlapRecorder()({id:'E',sha256:'sha-E'});
+          for(let i=0;i<200;i++){wall+=25;ticks[0].fn();}
+          const {rows,dropped}=api.collectOverlapRecorder();
+          assert.equal(rows.length,150);assert.equal(dropped,50);
+          assert.equal(rows[0].wall,25*51);assert.equal(rows.at(-1).wall,25*200);
+        """)
+
+    def test_merged_rows_are_strictly_increasing_and_share_one_overlap_definition(self):
+        self.run_node("""
+          const polled=[{wall:10},{wall:200},{wall:900}], recorded=[{wall:200},{wall:250},{wall:300},{wall:300.5}];
+          assert.deepEqual(api.mergeRows(polled,recorded).map(row=>row.wall),[10,200,250,300,300.5,900]);
+          assert.throws(()=>api.mergeRows(polled,[{wall:NaN}]),/finite wall/);
+          assert.throws(()=>api.mergeRows(polled,[{}]),/finite wall/);
+          const target={id:'E',sha256:'sha-E'};
+          const row=()=>({phase:'CROSSFADING',incoming:{item:'E',sha:'sha-E',ready:4,paused:false,decoded:.4,
+            src:'blob:E',currentSrc:'blob:E',progress:{sourceChanges:2}},
+            nodes:[{id:'loop-3',item:'C'},{id:'loop-4',item:'T'}]});
+          assert.equal(api.qualifiesAsOverlap(row(),target,'C','T'),true);
+          for(const mutate of [r=>{r.incoming.paused=true},r=>{r.incoming.progress.sourceChanges=1},
+              r=>{r.incoming.decoded=NaN},r=>{r.incoming.ready=0},r=>{r.incoming.currentSrc=''},
+              r=>{r.incoming.item='Z'},r=>{r.phase='PRIMING'},r=>{r.nodes[0].item='Q'},r=>{r.nodes[1].item='Q'}]) {
+            const candidate=row();mutate(candidate);
+            assert.equal(api.qualifiesAsOverlap(candidate,target,'C','T'),false);
+          }
         """)
 
     def test_zero_attempts_are_not_exercised_and_missing_receipts_fail(self):

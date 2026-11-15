@@ -6,6 +6,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -24,7 +25,7 @@ SECRET = "Hello, my name is Zelda Quux and my number is 0123456789."
 
 
 def ffmpeg(*arguments: str) -> None:
-    subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *arguments],
+    retry.run(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *arguments],
                    check=True, capture_output=True)
 
 

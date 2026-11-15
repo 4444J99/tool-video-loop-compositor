@@ -3,13 +3,14 @@ import functools
 import http.server
 import json
 import os
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import threading
 
 import pytest
 
 from simvltanea.lab.tests.e2e.helpers import APP, DATA, FIXTURES, ROOT
+from simvltanea.browser import silent_launch
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -32,7 +33,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 @pytest.fixture(scope="session")
 def server():
     if not os.path.exists(os.path.join(FIXTURES, "data", "clips.json")):
-        subprocess.run([sys.executable, "-m", "simvltanea.lab.make_fixtures"], check=True)
+        retry.run([sys.executable, "-m", "simvltanea.lab.make_fixtures"], check=True)
     handler = functools.partial(QuietHandler, directory=ROOT)
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)  # port 0 = random free port
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -55,7 +56,7 @@ def browser():
     with sync_playwright() as p:
         # Same sandbox and shared-memory flags as the other browser suites (GitHub-hosted Ubuntu 24.04 runners).
         args = ["--autoplay-policy=no-user-gesture-required", "--no-sandbox", "--disable-dev-shm-usage"]
-        b = p.chromium.launch(executable_path=exe, headless=True, args=args)
+        b = silent_launch(p.chromium, executable_path=exe, headless=True, args=args)
         yield b
         b.close()
 

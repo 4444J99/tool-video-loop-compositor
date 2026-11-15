@@ -5,7 +5,7 @@ strips states in both orientations. Media is synthetic and stays below ``var/``.
 """
 from __future__ import annotations
 
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 from fractions import Fraction
 
@@ -57,7 +57,7 @@ class RampMediaTests(unittest.TestCase):
         self.assertEqual([s['id'] for s in sources], [f'strip-{k + 1}' for k in range(12)])
         width, height = runtime.RAMP_SIZE
         path = PROOFS_DIR / sources[4]['path']
-        raw =subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), '-frames:v', '1', '-f', 'rawvideo',
+        raw =retry.run(['ffmpeg', '-v', 'error', '-i', str(path), '-frames:v', '1', '-f', 'rawvideo',
                               '-pix_fmt', 'yuv444p', '-'], capture_output=True, check=True).stdout
         plane = width * height
         def rgb(x, y):

@@ -1,5 +1,5 @@
 """Recover an observed loop-boundary freeze even when WebKit reports no seek."""
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 from simvltanea.browser.test_browser_loop_seek import FIXTURE, LIVE
@@ -7,7 +7,7 @@ from simvltanea.browser.test_browser_loop_seek import FIXTURE, LIVE
 
 class UnflaggedLoopWrapTests(unittest.TestCase):
     def run_js(self, body):
-        result = subprocess.run(
+        result = retry.run(
             ['node', '-e', FIXTURE + body, str(LIVE)],
             capture_output=True, text=True,
         )

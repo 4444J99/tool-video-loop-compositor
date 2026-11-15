@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
+from simvltanea import subprocess_retry as retry
 import tempfile
 import unittest
 from pathlib import Path
@@ -37,7 +37,7 @@ class InauguralFixtureTests(unittest.TestCase):
             targets = MODULE.generate(Path(temp), duration=0.125, size=64)
             self.assertEqual(len(targets), 3)
             for target in targets:
-                result = subprocess.run(
+                result = retry.run(
                     [
                         "ffprobe",
                         "-v",

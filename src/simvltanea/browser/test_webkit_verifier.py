@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -154,6 +154,16 @@ result.requestFailures = [{wall: parkedCase.error, url: parkedUrl, method: 'GET'
 '''
 
 
+TEARDOWN_BLOB = r'''
+// Run 43702981423: a standby deck still loading at the final sample is cancelled when browser.close() runs.
+const teardownUrl = 'blob:http://127.0.0.1/standby-at-close';
+result.samples[result.samples.length - 1].decks = [{id: 'loop-1', deck: 1, active: false, populated: true,
+  src: teardownUrl, currentSrc: teardownUrl, ready: 0, nativeError: null, weight: 0}];
+result.requestFailures = [Object.freeze({wall: 182800, phase: 'closing', url: teardownUrl, method: 'GET',
+  resourceType: 'other', failure: {errorText: 'cancelled'}})];
+Object.freeze(result.requestFailures);
+'''
+
 PARKED_THEN_RETIRED_BLOB = r'''
 // Native run 42457345385 held-source timings: the later ordinary retirement
 // must not invalidate a separately proven earlier preparation/admission.
@@ -173,7 +183,7 @@ parkRows.push({wall: 118200, nodes: [], decks: []});
 
 def classify(mutation: str = '') -> dict:
     program = FIXTURE + mutation + '\nprocess.stdout.write(JSON.stringify(analyse(result)));'
-    completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+    completed = retry.run(['node', '-e', program, str(VERIFIER)], check=True,
                                capture_output=True, text=True, timeout=15)
     return json.loads(completed.stdout)
 
@@ -183,7 +193,7 @@ def classify_resources(mutation: str) -> dict:
 const resourceErrors = require(process.argv[1]).classifyResourceErrors(result);
 process.stdout.write(JSON.stringify({pass: resourceErrors.unexpected.length === 0, resourceErrors}));
 '''
-    completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+    completed = retry.run(['node', '-e', program, str(VERIFIER)], check=True,
                                capture_output=True, text=True, timeout=15)
     return json.loads(completed.stdout)
 
@@ -199,7 +209,7 @@ const urls = [
 ];
 process.stdout.write(JSON.stringify(urls));
 '''
-        completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+        completed = retry.run(['node', '-e', program, str(VERIFIER)], check=True,
                                    capture_output=True, text=True, timeout=15)
         self.assertEqual(json.loads(completed.stdout), [
             'http://127.0.0.1:8456/watch.html?seed=7&mix=s0.1.2.3&evolve=0&proof=1',
@@ -308,6 +318,52 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
         self.assertEqual(len(summary['resourceErrors']['expectedAborts']), 1)
         self.assertEqual(summary['resourceErrors']['expectedAborts'][0]['lagMs'], 100)
 
+    def test_browser_close_cancelling_a_populated_source_is_teardown_not_a_playback_error(self):
+        summary = classify(TEARDOWN_BLOB)
+        self.assertTrue(summary['pass'], summary)
+        errors = summary['resourceErrors']
+        self.assertEqual(errors['unexpected'], [])
+        self.assertEqual(len(errors['expectedTeardown']), 1)
+        self.assertEqual(errors['expectedTeardown'][0]['url'], 'blob:http://127.0.0.1/standby-at-close')
+        self.assertEqual(errors['expectedTeardown'][0]['finalObservedAt'], 181860)
+
+    def test_teardown_proof_requires_closing_phase_final_ownership_and_no_retirement(self):
+        for mutation in (
+            "result.requestFailures = [{...result.requestFailures[0], phase: 'sustained'}];",
+            "result.requestFailures = [{...result.requestFailures[0], phase: undefined}];",
+            "result.requestFailures = [{...result.requestFailures[0], wall: 181000}];",
+            "result.requestFailures = [{...result.requestFailures[0], method: 'POST'}];",
+            "result.requestFailures = [{...result.requestFailures[0], failure: {errorText: 'network failed'}}];",
+            "result.requestFailures = [{...result.requestFailures[0], url: 'blob:http://127.0.0.1/other'}];",
+            "result.requestFailures = [{...result.requestFailures[0], url: 'http://127.0.0.1/library/clip.mp4'}];",
+            "result.samples.at(-1).decks[0].populated = false;",
+            "result.samples.at(-1).decks[0].active = true;",
+            "result.samples.at(-1).decks[0].ready = 4;",
+            # A visible, non-active incoming deck during crossfade (weight and foreground progress set before
+            # node.active flips) is not hidden standby.
+            "result.samples.at(-1).decks[0].weight = 0.4;",
+            "result.samples.at(-1).decks[0].progress = {foreground: true, foregroundSince: 182000};",
+            "delete result.samples.at(-1).decks[0].weight;",
+            # First row showing the URL is the final one: the preceding row is the only age bound. A stalled
+            # evaluate delaying the first sighting (preceding row older than TEARDOWN_YOUNG_MS) must not pass.
+            "result.samples.at(-2).wall = result.samples.at(-1).wall - 6000;",
+            "result.samples.at(-1).decks[0].src = teardownUrl; result.samples.splice(0, result.samples.length - 1);"
+            " result.prelude = {samples: []};",
+            # A standby stuck loading for over TEARDOWN_YOUNG_MS is a hung load, not a close() artefact.
+            "result.samples[result.samples.length - 60].decks = [{id: 'loop-1', deck: 1, active: false, populated: true,"
+            " src: teardownUrl, currentSrc: teardownUrl, ready: 0, nativeError: null}];",
+            "result.requestFailures = [{...result.requestFailures[0], resourceType: 'fetch'}];",
+            "result.samples.pop();",
+            "result.requestFailures = [{...result.requestFailures[0], wall: 181860 + 6000}];",
+            "result.samples.at(-1).decks[0].src = '';",
+            "result.events.push({type: 'resource-retired', role: 'deck', id: 'loop-1', url: teardownUrl, wall: 100000,"
+            " readyState: 0, paused: true});",
+        ):
+            with self.subTest(mutation=mutation):
+                summary = classify_resources(TEARDOWN_BLOB + mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['expectedTeardown'], [])
+
     def test_hidden_preparation_cancellation_requires_verified_same_source_admission(self):
         cases = (
             {'id': 'loop-2', 'before': 38178, 'error': 38504, 'first': 38429,
@@ -331,6 +387,31 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
                 self.assertEqual(proof['epoch'], 1)
                 self.assertEqual([frame['wall'] for frame in proof['frames']], case['frames'])
                 self.assertEqual(proof['promotedAt'], case['promoted'])
+
+    def test_standby_parked_before_its_first_frame_is_admitted_only_by_the_frames_that_follow(self):
+        # Local macOS WebKit parks a READY standby (ready 4, paused) with zero frame callbacks, then decodes normally
+        # once resumed. The park itself proves nothing; the later owned frames and the promotion still do.
+        zero = r'''
+for (const row of parkRows) {
+  const deck = row.decks[1];
+  if (deck.paused && row.nodes[0].phase === 'READY') {
+    Object.assign(deck.progress, {changes: 0, sourceChanges: 0, lastChangeWall: null, mediaTime: null, trace: []});
+    deck.decoded = null;
+  }
+}
+'''
+        summary = classify_resources(PARKED_BLOB + zero)
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(len(summary['resourceErrors']['admittedPreparations']), 1)
+        for refusal in (
+            "for (const row of parkRows) if (row.decks[1].progress.foreground) row.decks[1].progress.trace = [];",
+            "parkRows.forEach(row => { if (row.decks[1].paused) row.decks[1].progress.sourceChanges = -1; });",
+            "parkRows.forEach(row => { if (row.decks[1].paused) row.decks[1].progress.sourceChanges = 1.5; });",
+        ):
+            with self.subTest(refusal=refusal):
+                summary = classify_resources(PARKED_BLOB + zero + refusal)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
 
     def test_proven_later_retirement_preserves_prior_preparation_admission(self):
         summary = classify_resources(PARKED_THEN_RETIRED_BLOB)
@@ -427,6 +508,72 @@ parkRows[0].wall -= 140; parkRows[0].decks[1].progress.foregroundSince = 1;''',
                 summary = classify_resources(PARKED_BLOB + mutation)
                 self.assertFalse(summary['pass'], summary)
                 self.assertEqual(summary['resourceErrors'].get('admittedPreparations', []), [])
+
+    OBSERVER_GAP_CASE = {'id': 'loop-2', 'before': 38178, 'error': 38504, 'first': 38429,
+                         'parked': 38642, 'lastPark': 42006, 'resume': 42157,
+                         'frames': [42163, 42196], 'visible': 42196, 'promoted': 44896}
+
+    def classify_observer_gap(self, mutation: str = '', case: dict | None = None) -> dict:
+        # The sampler was delayed 2 s after the first visible rows (run 43732681195). The page ran throughout: its
+        # simulation clock and the incoming deck's frame callbacks advance with wall time after visibility.
+        return classify_resources('globalThis.parkedCase = ' + json.dumps(case or self.OBSERVER_GAP_CASE) + ';\n'
+                                  + PARKED_BLOB + r'''
+for (const row of parkRows) {
+  row.simTime = row.wall / 1000;
+  if (row.wall > parkedCase.visible) row.decks[1].callbacks = row.wall;
+}
+''' + mutation)
+
+    def test_one_observer_side_gap_after_visibility_still_admits_the_standby(self):
+        summary = self.classify_observer_gap()
+        self.assertTrue(summary['pass'], summary)
+        proof = summary['resourceErrors']['admittedPreparations'][0]
+        self.assertEqual((proof['id'], proof['deck'], proof['epoch']), ('loop-2', 1, 1))
+        self.assertEqual(proof['promotedAt'], 44896)
+
+    def test_a_gap_is_not_bridged_unless_the_page_demonstrably_ran(self):
+        for label, mutation in (
+            ('simulation clock frozen', "for (const row of parkRows) if (row.wall > parkedCase.visible + 700) row.simTime = (parkedCase.visible + 700) / 1000;"),
+            ('simulation clock lags the gap', "for (const row of parkRows) if (row.wall > parkedCase.visible + 700) row.simTime = (parkedCase.visible + 700) / 1000 + .5;"),
+            ('incoming callbacks flat', "for (const row of parkRows) if (row.wall > parkedCase.visible) row.decks[1].callbacks = 99;"),
+            ('incoming deck absent after the gap', "parkRows.at(-1).decks.splice(1, 1);"),
+        ):
+            with self.subTest(label):
+                summary = self.classify_observer_gap(mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
+    def test_a_bridged_gap_cannot_hide_a_changed_source_epoch_or_foreground_start(self):
+        for label, mutation in (
+            ('epoch', "parkRows.at(-1).decks[1].progress.epoch = 2;"),
+            ('foreground start', "parkRows.at(-1).decks[1].progress.foregroundSince += 1;"),
+            ('url', "parkRows.at(-1).decks[1].progress.url = 'blob:http://127.0.0.1/other';"),
+        ):
+            with self.subTest(label):
+                summary = self.classify_observer_gap(mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
+    def test_only_one_gap_and_only_a_bounded_one_is_bridged(self):
+        # A second gap between the visible rows and promotion.
+        two = self.classify_observer_gap(case=dict(self.OBSERVER_GAP_CASE, promoted=47000), mutation=
+            "const late = makeParkRow(parkedCase.visible + 2700, 'CROSSFADING', false, true, false, 3, .25);"
+            "late.simTime = late.wall / 1000; late.decks[1].callbacks = late.wall;"
+            "parkRows.splice(parkRows.length - 1, 0, late);")
+        self.assertFalse(two['pass'], two)
+        self.assertEqual(two['resourceErrors']['admittedPreparations'], [])
+        # A gap beyond the five second bound, even with a live page.
+        long_gap = dict(self.OBSERVER_GAP_CASE, promoted=42196 + 700 + 5500)
+        summary = self.classify_observer_gap(case=long_gap)
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
+    def test_a_gap_before_the_frames_and_visibility_are_proven_is_never_bridged(self):
+        # The observer exception covers promotion only; the pre-visibility evidence stays continuous.
+        case = dict(self.OBSERVER_GAP_CASE, visible=44196, frames=[44163, 44196], resume=44157, promoted=45500)
+        summary = self.classify_observer_gap(case=case)
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
 
     def test_hidden_resume_cannot_delay_visibility_beyond_its_evidence_deadline(self):
         # Two early decoded frames cannot justify a later visibility boundary.
@@ -527,17 +674,97 @@ result.samples.slice(800, 840).forEach(row => {row.nodes[0].decoded = .5;});
             with self.subTest(mutation=mutation):
                 self.assert_refused(NATIVE_PROGRESS + mutation, 'observationCoverage')
 
-    def test_native_gap_between_polls_or_retired_source_still_fails(self):
+    def test_one_native_stall_between_polls_is_tolerated_and_reported(self):
+        # The running maximum stays latched at the stall for the rest of the run (and after its source is
+        # gone); only the rise opens an episode, so the latched value must not condemn the run.
         for mutation in (
-            # Progress has already resumed when the next host sample arrives.
             'result.samples.slice(800).forEach(row => {row.progressSummary.maxGapMs = 2100;});',
-            # Same failure retained after its source has completely disappeared.
             'result.samples.slice(500).forEach(row => {row.progressSummary.maxGapMs = 2100;});',
         ):
             with self.subTest(mutation=mutation):
+                summary = classify(NATIVE_PROGRESS + mutation)
+                self.assertTrue(summary['pass'], summary)
+                self.assertEqual(summary['stalls'], {'episodes': 1, 'peakMs': 2100, 'tolerated': True})
+                self.assertEqual(summary['progressCoverage']['nativeMaximumGapMs'], 2100)
+
+    def test_a_stalled_run_that_never_recovers_or_stalls_repeatedly_still_fails(self):
+        three = (
+            'result.samples.slice(300).forEach(row => {row.progressSummary.maxGapMs = 2100;});\n'
+            'result.samples.slice(600).forEach(row => {row.progressSummary.maxGapMs = 2200;});\n'
+            'result.samples.slice(900).forEach(row => {row.progressSummary.maxGapMs = 2300;});')
+        for mutation, episodes in (
+            # One stall longer than the cap: the decoder stayed frozen.
+            ('result.samples.slice(800).forEach(row => {row.progressSummary.maxGapMs = 4500;});', 1),
+            # Growing without end, as a frozen decoder reports.
+            ('result.samples.slice(800).forEach((row, index) => '
+             '{row.progressSummary.maxGapMs = 2100 + index * 137;});', 1),
+            # Three separate stalls, each recovered, each higher than the last.
+            (three, 3),
+        ):
+            with self.subTest(mutation=mutation):
                 summary = self.assert_refused(NATIVE_PROGRESS + mutation, 'decodedProgress')
-                self.assertEqual(summary['longestDecodedHoldMs'], 2100)
                 self.assertEqual(summary['verdict'], 'FAIL')
+                self.assertEqual(summary['stalls']['episodes'], episodes)
+                self.assertFalse(summary['stalls']['tolerated'])
+
+    def test_recovered_stalls_on_separate_sources_each_count_below_the_session_maximum(self):
+        def retired(count):
+            entries = ',\n  '.join(
+                "{schema: 1, supported: true, live: false, id: 'loop-1', deck: 0, url: 'blob:gone-%d', epoch: 1, "
+                "changes: 5, sourceChanges: 5, mediaTime: 1, currentGapMs: 0, maxGapMs: 2100, lifetimeMaxGapMs: 2100}" % n
+                for n in range(count))
+            return ('result.samples.slice(800).forEach(row => {row.progressSummary.maxGapMs = 2100; '
+                    'row.progressSummary.retired = [\n  ' + entries + '];});')
+        two = classify(NATIVE_PROGRESS + retired(2))
+        self.assertTrue(two['pass'], two)
+        self.assertEqual(two['stalls']['episodes'], 2)
+        three = self.assert_refused(NATIVE_PROGRESS + retired(3), 'decodedProgress')
+        self.assertEqual(three['stalls']['episodes'], 3)
+
+    def test_each_recovered_host_hold_of_one_resident_is_its_own_episode(self):
+        def freeze(count):
+            return '\n'.join(
+                f'result.samples.slice({start}, {start + 21}).forEach(row => {{row.nodes[0].decoded = .5;}});'
+                for start in (200, 450, 700, 950)[:count])
+        two = classify(freeze(2))
+        self.assertTrue(two['pass'], two)
+        self.assertEqual(two['stalls']['episodes'], 2)
+        three = self.assert_refused(freeze(3), 'decodedProgress')
+        self.assertEqual(three['stalls']['episodes'], 3)
+
+    def test_a_host_wide_hold_of_every_resident_at_once_is_one_episode(self):
+        # The runner paused every decoder together (run 43614889899: four decks held about 2 s at one
+        # wall time). That is one host event, not four decoder failures.
+        def freeze_all(starts):
+            return '\n'.join(
+                f'result.samples.slice({start}, {start + 21}).forEach(row => '
+                f'{{row.nodes.forEach(node => {{node.decoded = .5;}});}});' for start in starts)
+        one = classify(freeze_all((200,)))
+        self.assertTrue(one['pass'], one)
+        self.assertEqual(one['stalls']['episodes'], 1)
+        two = classify(freeze_all((200, 450)))
+        self.assertTrue(two['pass'], two)
+        self.assertEqual(two['stalls']['episodes'], 2)
+
+    def test_repeated_host_wide_holds_and_a_frozen_decoder_still_fail(self):
+        def freeze_all(starts):
+            return '\n'.join(
+                f'result.samples.slice({start}, {start + 21}).forEach(row => '
+                f'{{row.nodes.forEach(node => {{node.decoded = .5;}});}});' for start in starts)
+        three = self.assert_refused(freeze_all((200, 450, 700)), 'decodedProgress')
+        self.assertEqual(three['stalls']['episodes'], 3)
+        self.assertFalse(three['stalls']['tolerated'])
+        frozen = self.assert_refused(
+            'result.samples.slice(200).forEach(row => {row.nodes[0].decoded = .5;});', 'decodedProgress')
+        self.assertFalse(frozen['stalls']['tolerated'])
+
+    def test_two_recovered_stalls_pass(self):
+        two = (
+            'result.samples.slice(300).forEach(row => {row.progressSummary.maxGapMs = 2100;});\n'
+            'result.samples.slice(700).forEach(row => {row.progressSummary.maxGapMs = 2600;});')
+        summary = classify(NATIVE_PROGRESS + two)
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(summary['stalls'], {'episodes': 2, 'peakMs': 2600, 'tolerated': True})
 
     def test_provisional_incoming_may_await_its_first_tracked_frame(self):
         summary = classify(NATIVE_PROGRESS + '''
@@ -593,7 +820,7 @@ assert.equal(result.samples, samples);
 assert.equal(JSON.stringify(result), before);
 process.stdout.write(JSON.stringify(summary));
 '''
-        completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+        completed = retry.run(['node', '-e', program, str(VERIFIER)], check=True,
                                    capture_output=True, text=True, timeout=15)
         summary = json.loads(completed.stdout)
         self.assertTrue(summary['pass'], summary)
@@ -685,7 +912,7 @@ const {proofJournal} = require(process.argv[1]);
   await assert.rejects(closeFailure.close(), /flush failed/);
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
-        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+        retry.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
 
     def test_dense_prelude_metadata_is_bounded_and_reconstructs_all_raw_evidence(self):
         program = r'''
@@ -719,7 +946,7 @@ assert.ok(Buffer.byteLength(JSON.stringify(legacy)) > 2 * 1024 * 1024);
   assert.deepEqual(preludeJournalMetadata(JSON.parse(before)), metadata);
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
-        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+        retry.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
 
     def test_prelude_metadata_rejects_unwitnessed_or_changed_source_rows(self):
         program = r'''
@@ -738,7 +965,7 @@ assert.throws(() => preludeJournalMetadata({...prelude, incomingObservations: []
 const ordinary = {samples: [{wall: 1}], before: {wall: 2}, after: {wall: 3}};
 assert.deepEqual(preludeJournalMetadata(ordinary), {samples: 1, before: {wall: 2}, after: {wall: 3}});
 '''
-        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+        retry.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
 
     def test_recorded_failure_after_completed_sampling_cannot_pass(self):
         self.assert_refused("result.failure = 'Screenshot failed after the browser closed';", 'noFailure')

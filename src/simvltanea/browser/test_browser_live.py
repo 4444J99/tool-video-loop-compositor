@@ -10,6 +10,7 @@ from pathlib import Path
 
 from simvltanea.browser.test_browser_runtime import browser_executable
 from simvltanea.browser.test_browser_studio import ffmpeg, prepare_fixtures
+from simvltanea.browser.silent_browser import silent_launch
 
 HERE = Path(__file__).parent
 LIVE = HERE / 'browser.live.js'
@@ -134,7 +135,7 @@ class PersistentSessionTests(unittest.TestCase):
         from playwright.sync_api import sync_playwright
         cls.fixtures = prepare_fixtures()
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=browser_executable(), headless=True,
                                            args=['--no-sandbox', '--disable-dev-shm-usage'])
 
     @classmethod

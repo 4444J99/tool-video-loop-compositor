@@ -10,6 +10,7 @@ const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {sample, staticServer, ready, click, proofJournal} = require('./verify_webkit_sustained.js');
 const {libraryClips} = require('./browser.studio.js');
+const {silentLaunch} = require('./silent_browser.js');
 const BASE = 'f3c724ecd7d4483e11e8d0b623a8e283cf0501a3';
 const BASE_LIVE_SHA = '6b317d6951a9248faabdd8991a94f99174314ae757102e4b5a27e3ed351eb055';
 const MANIFEST_SHA = '030d6446b3a57ea003ec056fdb7ed3e553c10f184b477346822eec5b4f9ca401';
@@ -195,7 +196,7 @@ async function arm(browserType,launchOptions,device,base,out,name,runtimeBytes,q
   const result={arm:name,diagnosticOnly:true,durationMs,completed:false,errors:[],sourceErrors:[],chunks:[],rpc:[],host:[]};
   const journal=proofJournal(out,name);let browser;
   try{
-    browser=await browserType.launch(launchOptions);const context=await browser.newContext(device),page=await context.newPage();
+    browser=await silentLaunch(browserType,launchOptions);const context=await browser.newContext(device),page=await context.newPage();
     page.on('pageerror',e=>result.errors.push(String(e)));
     if(runtimeBytes)await page.route(base+'runtime.js',route=>route.fulfill({contentType:'application/javascript',body:runtimeBytes}));
     await page.goto(base+query,{waitUntil:'domcontentloaded',timeout:20000});await ready(page);

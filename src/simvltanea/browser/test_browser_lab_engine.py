@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 from simvltanea import subprocess_retry as retry
 import unittest
+from simvltanea.browser.silent_browser import silent_launch
 
 HERE = Path(__file__).resolve().parent
 NODE = shutil.which("node")
@@ -377,7 +378,7 @@ class LabEngineSignalTests(unittest.TestCase):
         from simvltanea.browser.test_browser_runtime import browser_executable
         executable = browser_executable()
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=executable, headless=True, args=['--no-sandbox', '--autoplay-policy=no-user-gesture-required'])
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=executable, headless=True, args=['--no-sandbox', '--autoplay-policy=no-user-gesture-required'])
 
     @classmethod
     def tearDownClass(cls):

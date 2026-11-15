@@ -9,6 +9,7 @@ from simvltanea import subprocess_retry as retry
 import time
 import unittest
 from urllib.parse import urlparse
+from simvltanea.browser.silent_browser import silent_launch
 
 HERE = Path(__file__).parent
 
@@ -96,7 +97,7 @@ class FilterControlsBrowserTests(unittest.TestCase):
         cls.files['library/manifest.json'] = json.dumps({'schema': 'simvltanea.public-demo/1', 'clips': clips}).encode()
         cls.files.update(cls.media)
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=browser_executable(), headless=True,
                                             args=['--no-sandbox', '--disable-dev-shm-usage'])
 
     @classmethod

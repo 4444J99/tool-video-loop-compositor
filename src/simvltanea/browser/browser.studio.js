@@ -1323,7 +1323,9 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       if (!ownsIntent()) return false;
       const reordered = admission.some((item, index) => item !== items[index]);
       r.setSound({enabled: wantSound(), volume: sound.volume});
+      const deferralsBefore = r.deferredHandoffs || 0;
       const completed = await r.reconcile({plan, items: admission, playing: !hold && !paused, atLoopBoundary});
+      const deferred = (r.deferredHandoffs || 0) > deferralsBefore;
       if (!ownsIntent()) return false;
       const revision = r.revision;
       const cohort = plan.tracks.map(track => {
@@ -1359,8 +1361,8 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       if (usingLibrary()) prefetchNext();
       // A deferral keeps the exact old variant, and nothing else would revisit
       // it. A loop-mode toggle re-attempts the handoff a bounded number of times.
-      if (repair?.attempts > 0 && !completed && changed)
-        scheduleLoopModeRepair(token, repair.attempts, actualItems);
+      if (repair?.attempts > 0 && !completed && changed && deferred)
+        scheduleLoopModeRepair(selection, repair.attempts, actualItems);
       return completed;
     } catch (error) {
       if (token === launches && error.name !== 'AbortError') toast(oneLine(error.message || error));
@@ -1372,20 +1374,24 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   // The toggle's own handoff can be deferred when the incoming clip never
   // presented fresh frames in time (a starved page). The studio then describes
   // the exact mixed field, which is correct, but nothing would revisit it and
-  // the field would stay mixed until the next edit. Re-attempt after one outgoing loop
-  // (frames that were not ready then usually are now), at most
-  // LOOP_MODE_REPAIR_ATTEMPTS times, while the toggle is still the newest intent:
-  // any other launch bumps `launches` and cancels the pending attempt, and a
-  // second deferral past the bound keeps today's mixed outcome.
+  // the field would stay mixed until the next edit. Re-attempt after one outgoing
+  // loop (frames that were not ready then usually are now), at most
+  // LOOP_MODE_REPAIR_ATTEMPTS times, and only after a genuine readiness deferral
+  // (a decode or playback error is not transient and is not retried). The attempt
+  // lapses once any edit replaces the selection; a deferral past the bound keeps
+  // today's mixed outcome.
   const LOOP_MODE_REPAIR_ATTEMPTS = 2;
   let repairTimer = null;
-  function scheduleLoopModeRepair(token, attempts, resident) {
+  function scheduleLoopModeRepair(owner, attempts, resident) {
     clearTimeout(repairTimer);
     const loopSeconds = Math.max(0, ...resident.map(item => Number(item.quantized?.duration) || 0));
     const delayMs = Math.min(8000, Math.max(1000, loopSeconds * 1000));
     const attempt = () => {
       repairTimer = null;
-      if (token !== launches || !selection) return;
+      // Keyed to the selection object, not to the launch counter: a playback-only
+      // relaunch (resume, repair) keeps this selection and must not cancel the
+      // repair, while any edit builds a new selection and does.
+      if (selection !== owner) return;
       // Paused, held or hidden pages cannot present fresh frames: wait, without
       // spending an attempt, until the studio is running again.
       if (document.hidden || hold || paused) { repairTimer = setTimeout(attempt, delayMs); return; }

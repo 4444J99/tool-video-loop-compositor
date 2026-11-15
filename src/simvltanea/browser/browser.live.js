@@ -716,7 +716,8 @@ function applySlice(node) {
                   if (error.name === 'AbortError') throw error;
                   success = false;
                   if (error instanceof DeferredHandoffError)
-                    this.record('handoff-deferred', node.id, {reason: error.message, ...error.detail});
+                    { this.deferredHandoffs = (this.deferredHandoffs || 0) + 1;
+                      this.record('handoff-deferred', node.id, {reason: error.message, ...error.detail}); }
                   else this.report(error, node);
                 }
               } else {

@@ -107,6 +107,27 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
         self.assertTrue(page.evaluate(
             "[...compositionRuntime.nodes.values()].every(n=>!n.media.paused)"))
 
+    def test_decode_failure_is_not_a_deferral_and_is_not_retried(self):
+        page = self.ready(site='settlement-variant')
+        boomerang = page.evaluate("compositionRuntime.nodes.get('loop-1').item.clip.variants.boomerang.id")
+        page.evaluate('''() => {
+          const r=compositionRuntime, prime=r.prime.bind(r);
+          window.decodeFailures=0;
+          r.prime=async (...args)=>{
+            if(args[1].id==='loop-1') { decodeFailures++; throw new Error('Incoming clip could not be decoded'); }
+            return prime(...args);
+          };
+        }''')
+        self.tap(page, '#loop-mode')
+        page.wait_for_function('() => decodeFailures>=1', timeout=15000)
+        self.settled(page)
+        page.wait_for_timeout(7000)
+        self.settled(page)
+        self.assertEqual(page.evaluate('decodeFailures'), 1, 'a failing asset must not be retried')
+        self.assertEqual(self.deferrals(page), 0)
+        self.assertEqual(page.evaluate("compositionRuntime.events.filter(e=>e.type==='handoff-reattempt').length"), 0)
+        self.assertEqual(self.loop_one_asset(page), boomerang)
+
     def test_next_edit_supersedes_the_pending_re_attempt(self):
         page = self.ready(site='settlement-variant')
         boomerang = page.evaluate("compositionRuntime.nodes.get('loop-1').item.clip.variants.boomerang.id")

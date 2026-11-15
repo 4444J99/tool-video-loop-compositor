@@ -28,15 +28,6 @@ PYTHON = re.compile(r'executable|python')
 MODULE = re.compile(r"['\"]-m['\"]")
 
 PENDING: set[str] = {
-    'src/independent_loop_compositor/test_proxy.py',
-    'src/simvltanea/generators/test_strips_fixtures.py',
-    'src/simvltanea/lab/test_lab_e2e.py',
-    'src/simvltanea/lab/test_lab_unit.py',
-    'src/simvltanea/lab/tests/e2e/conftest.py',
-    'src/simvltanea/lab/tests/e2e/e2e_controls.py',
-    'src/simvltanea/lab/tests/e2e/e2e_presets_patches.py',
-    'src/simvltanea/rendering/test_audio_render.py',
-    'src/simvltanea/rendering/test_rate_frames.py',
     'tools/editions/test_inaugural_fixture.py',
     'tools/media/test_build_boomerangs.py',
     'tools/media/test_build_lab_dataset.py',

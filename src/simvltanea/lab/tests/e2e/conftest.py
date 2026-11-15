@@ -3,7 +3,7 @@ import functools
 import http.server
 import json
 import os
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import threading
 
@@ -32,7 +32,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 @pytest.fixture(scope="session")
 def server():
     if not os.path.exists(os.path.join(FIXTURES, "data", "clips.json")):
-        subprocess.run([sys.executable, "-m", "simvltanea.lab.make_fixtures"], check=True)
+        retry.run([sys.executable, "-m", "simvltanea.lab.make_fixtures"], check=True)
     handler = functools.partial(QuietHandler, directory=ROOT)
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)  # port 0 = random free port
     t = threading.Thread(target=httpd.serve_forever, daemon=True)

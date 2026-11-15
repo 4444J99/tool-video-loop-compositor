@@ -10,8 +10,8 @@ PRESET_IDS = None
 
 
 def preset_ids():
-    import subprocess
-    out = subprocess.run(["node", "-e", "import('%s/presets.js').then(m => console.log(JSON.stringify(m.PRESETS.map(p => [p.id, p.values, p.resets]))))" % APP_DIR.as_posix()],
+    from simvltanea import subprocess_retry as retry
+    out = retry.run(["node", "-e", "import('%s/presets.js').then(m => console.log(JSON.stringify(m.PRESETS.map(p => [p.id, p.values, p.resets]))))" % APP_DIR.as_posix()],
                          capture_output=True, text=True, check=True).stdout
     return json.loads(out)
 

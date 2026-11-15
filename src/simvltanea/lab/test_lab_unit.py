@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from simvltanea import subprocess_retry as retry
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,7 +27,7 @@ SKIP_REASON = "node is not installed; the lab's unit tests and config reference 
 
 
 def node(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([NODE, *args], cwd=LAB_DIR, capture_output=True, text=True, encoding="utf-8",
+    return retry.run([NODE, *args], cwd=LAB_DIR, capture_output=True, text=True, encoding="utf-8",
                           check=False, timeout=600)
 
 

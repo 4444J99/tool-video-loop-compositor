@@ -683,7 +683,7 @@ function applySlice(node) {
       this.controller?.abort();
       if (this.pending) this.pending.resolve(false);
       const promise = new Promise(resolve => {
-        this.pending = {plan, items, playing, atLoopBoundary, revision: this.revision, resolve};
+        this.pending = {plan, items, playing, atLoopBoundary, revision: this.revision, resolve, deferred: new Set()};
       });
       if (!this.draining) this.drain();
       return promise;
@@ -716,7 +716,7 @@ function applySlice(node) {
                   if (error.name === 'AbortError') throw error;
                   success = false;
                   if (error instanceof DeferredHandoffError)
-                    { this.deferredHandoffs = {...this.deferredHandoffs, [node.id]: (this.deferredHandoffs?.[node.id] || 0) + 1};
+                    { request.deferred.add(node.id);
                       this.record('handoff-deferred', node.id, {reason: error.message, ...error.detail}); }
                   else this.report(error, node);
                 }
@@ -741,6 +741,9 @@ function applySlice(node) {
             success = false; this.report(error);
           } finally {
             if (this.controller === controller) this.controller = null;
+            // Which slots THIS request deferred, keyed by its revision, so a caller
+            // never attributes an earlier request's late deferral to its own.
+            this.lastDeferral = {revision: request.revision, slots: [...request.deferred]};
             request.resolve(success && request.revision === this.revision);
           }
         }

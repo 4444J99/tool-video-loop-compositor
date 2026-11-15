@@ -1337,10 +1337,12 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       if (!ownsIntent()) return false;
       const reordered = admission.some((item, index) => item !== items[index]);
       r.setSound({enabled: wantSound(), volume: sound.volume});
-      const deferralsBefore = {...r.deferredHandoffs};
-      const completed = await r.reconcile({plan, items: admission, playing: !hold && !paused, atLoopBoundary});
-      const deferredSlots = new Set(Object.entries(r.deferredHandoffs || {})
-        .filter(([id, count]) => count > (deferralsBefore[id] || 0)).map(([id]) => id));
+      const submitted = r.reconcile({plan, items: admission, playing: !hold && !paused, atLoopBoundary});
+      const submittedRevision = r.revision;
+      const completed = await submitted;
+      // Only this request's own deferrals: an earlier request can still record
+      // one late, and a failure of this request must not inherit it.
+      const deferredSlots = new Set(r.lastDeferral?.revision === submittedRevision ? r.lastDeferral.slots : []);
       if (!ownsIntent()) return false;
       const revision = r.revision;
       const cohort = plan.tracks.map(track => {

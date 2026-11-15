@@ -6,7 +6,7 @@ import copy
 import json
 import math
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -23,7 +23,7 @@ RATE = 48000
 
 
 def decoded(path: Path) -> tuple[array.array, array.array]:
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-map", "0:a:0",
+    raw = retry.run(["ffmpeg", "-v", "error", "-i", str(path), "-map", "0:a:0",
                           "-f", "f32le", "-ac", "2", "-ar", str(RATE), "-"],
                          check=True, capture_output=True).stdout
     values = array.array("f")
@@ -72,14 +72,14 @@ class AudioRenderTests(unittest.TestCase):
         for name, channels, stepped in (("steps", 1, True), ("sibling", 1, False), ("stereo", 2, False)):
             audio = cls.root / f"{name}.wav"
             write_tone(audio, 4, channels, stepped)
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+            retry.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
                             "color=c=blue:s=64x64:r=20:d=4", "-i", str(audio), "-c:v", "libx264",
                             "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le",
                             "-t", "4", str(cls.root / f"{name}.mov")], check=True, capture_output=True)
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+        retry.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
                         "color=c=red:s=64x64:r=20:d=4", "-c:v", "libx264", "-preset", "ultrafast",
                         "-pix_fmt", "yuv420p", "-an", str(cls.root / "silent.mp4")], check=True, capture_output=True)
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+        retry.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
                         "color=c=green:s=64x64:r=20:d=4", "-itsoffset", "1", "-i",
                         str(cls.root / "sibling.wav"), "-c:v", "libx264", "-preset", "ultrafast",
                         "-pix_fmt", "yuv420p", "-c:a", "aac", "-t", "4", str(cls.root / "delayed.mp4")],
@@ -130,7 +130,7 @@ class AudioRenderTests(unittest.TestCase):
 
     def test_fractional_source_eof_stays_audible_until_compiled_wrap(self):
         path = self.root / "fractional.mov"
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+        retry.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
                         "color=c=blue:s=64x64:r=40:d=0.975", "-i", str(self.root / "sibling.wav"),
                         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                         "-c:a", "pcm_s16le", "-t", "0.975", str(path)], check=True, capture_output=True)
@@ -297,7 +297,7 @@ class AudioRenderTests(unittest.TestCase):
         self.soundtrack(state)
         segments, settings = self.setup_render(state)
         r.render(segments, settings)
-        probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format",
+        probe = json.loads(retry.run(["ffprobe", "-v", "error", "-show_streams", "-show_format",
                                           "-of", "json", str(settings.output_file)],
                                          check=True, capture_output=True, text=True).stdout)
         videos = [stream for stream in probe["streams"] if stream["codec_type"] == "video"]

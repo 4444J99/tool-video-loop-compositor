@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,7 +23,7 @@ RATES = (0.5, 0.75, 1.25, 1.5, 2.0, 3.0)
 
 
 def make_ramp(path: Path) -> None:
-    subprocess.run(
+    retry.run(
         ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
          f"color=c=black:s=64x64:r={FPS}:d=4,geq=lum='N*2':cb=128:cr=128",
          "-c:v", "libx264", "-crf", "0", "-pix_fmt", "yuv420p", "-g", "1", str(path)],
@@ -31,7 +31,7 @@ def make_ramp(path: Path) -> None:
 
 
 def decode_source_frames(ramp: Path, video_filter: str) -> list[int]:
-    raw = subprocess.run(
+    raw = retry.run(
         ["ffmpeg", "-v", "error", "-i", str(ramp), "-filter_complex", video_filter, "-map", "[v]",
          # Inspect every filter output frame. FFmpeg 7 otherwise chooses a
          # 25-fps rawvideo output and drops frames from this 30-fps fixture.

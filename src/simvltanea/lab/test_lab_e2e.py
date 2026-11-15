@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import unittest
 
@@ -37,7 +37,7 @@ class LabPlaywrightTests(unittest.TestCase):
         # The repository's pytest settings (importlib mode, src on the path) apply; only the file pattern differs.
         command = [sys.executable, "-m", "pytest", str(E2E_DIR), "-q", "-rfE", "-p", "no:cacheprovider",
                    "-o", "python_files=e2e_*.py"]
-        result = subprocess.run(command, cwd=REPO_ROOT, env=env, capture_output=True, text=True,
+        result = retry.run(command, cwd=REPO_ROOT, env=env, capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", check=False, timeout=3600)
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, output[-12000:])

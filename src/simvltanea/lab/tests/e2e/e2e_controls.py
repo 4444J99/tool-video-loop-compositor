@@ -1,5 +1,5 @@
 import json
-import subprocess
+from simvltanea import subprocess_retry as retry
 
 import pytest
 
@@ -7,7 +7,7 @@ from simvltanea.lab.tests.e2e.helpers import APP_DIR
 
 
 def registry():
-    out = subprocess.run(["node", "-e", "import('%s/params.js').then(m => console.log(JSON.stringify(m.PARAMS)))" % APP_DIR.as_posix()],
+    out = retry.run(["node", "-e", "import('%s/params.js').then(m => console.log(JSON.stringify(m.PARAMS)))" % APP_DIR.as_posix()],
                          capture_output=True, text=True, encoding="utf-8", check=True).stdout
     return json.loads(out)
 

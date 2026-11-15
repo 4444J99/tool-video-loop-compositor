@@ -28,15 +28,6 @@ PYTHON = re.compile(r'executable|python')
 MODULE = re.compile(r"['\"]-m['\"]")
 
 PENDING: set[str] = {
-    'src/independent_loop_compositor/test_proxy.py',
-    'src/simvltanea/generators/test_strips_fixtures.py',
-    'src/simvltanea/lab/test_lab_e2e.py',
-    'src/simvltanea/lab/test_lab_unit.py',
-    'src/simvltanea/lab/tests/e2e/conftest.py',
-    'src/simvltanea/lab/tests/e2e/e2e_controls.py',
-    'src/simvltanea/lab/tests/e2e/e2e_presets_patches.py',
-    'src/simvltanea/rendering/test_audio_render.py',
-    'src/simvltanea/rendering/test_rate_frames.py',
     'tools/editions/test_inaugural_fixture.py',
     'tools/media/test_build_boomerangs.py',
     'tools/media/test_build_lab_dataset.py',
@@ -62,6 +53,27 @@ def is_test_file(path: Path) -> bool:
     return name.startswith('test_') or name == 'conftest.py' or name.startswith('e2e_') or 'tests' in path.relative_to(ROOT).parts
 
 
+def command_of(call: ast.Call) -> ast.AST | None:
+    """The command a subprocess call runs: its first positional argument, or the ``args`` keyword."""
+    if call.args:
+        return call.args[0]
+    for keyword in call.keywords:
+        if keyword.arg == 'args':
+            return keyword.value
+    return None
+
+
+def reachable(tree: ast.AST, names: set[str]) -> list[ast.AST]:
+    """What ``names`` were assigned, and what the names inside those values were assigned in turn."""
+    values, seen = [], set()
+    while names - seen:
+        seen |= names
+        found = assigned(tree, names)
+        values.extend(found)
+        names = {n.id for value in found for n in ast.walk(value) if isinstance(n, ast.Name)}
+    return values
+
+
 def opaque(command: ast.AST) -> bool:
     if isinstance(command, ast.Name):
         return True
@@ -80,22 +92,18 @@ def assigned(tree: ast.AST, names: set[str]) -> list[ast.AST]:
     return values
 
 
-def program_of(command: ast.AST, tree: ast.AST) -> str | None:
+def program_of(command: ast.AST, tree: ast.AST, seen: frozenset[str] = frozenset()) -> str | None:
     """The program a command list starts with, following a name or an unpacked name to what it was assigned."""
+    head = command
     if isinstance(command, ast.List) and command.elts:
         head = command.elts[0]
         if isinstance(head, ast.Starred):
             head = head.value
-        if isinstance(head, ast.Constant) and isinstance(head.value, str):
-            return head.value
-        if isinstance(head, ast.Name):
-            for value in assigned(tree, {head.id}):
-                found = program_of(value, tree)
-                if found:
-                    return found
-    if isinstance(command, ast.Name):
-        for value in assigned(tree, {command.id}):
-            found = program_of(value, tree)
+    if isinstance(head, ast.Constant) and isinstance(head.value, str):
+        return head.value
+    if isinstance(head, ast.Name) and head.id not in seen:
+        for value in assigned(tree, {head.id}):
+            found = program_of(value, tree, seen | {head.id})
             if found:
                 return found
     return None
@@ -120,14 +128,15 @@ def bare_child_calls(source: str) -> list[int]:
         through_import = isinstance(func, ast.Name) and func.id in functions
         if not (through_module or through_import):
             continue
-        if node.args and program_of(node.args[0], tree) in OTHER_PROGRAMS:
+        command = command_of(node)
+        if command is not None and program_of(command, tree) in OTHER_PROGRAMS:
             continue
         text = ast.unparse(node)
-        if node.args and opaque(node.args[0]):
+        if command is not None and opaque(command):
             # An opaque command (a variable, or a list that unpacks one): add what its names were assigned anywhere in
-            # the module, so a module-level command used inside a function is seen as well.
-            names = {n.id for n in ast.walk(node.args[0]) if isinstance(n, ast.Name)}
-            text += ' ' + ' '.join(ast.unparse(value) for value in assigned(tree, names))
+            # the module, following one name to the next, so a module-level command used inside a function is seen.
+            names = {n.id for n in ast.walk(command) if isinstance(n, ast.Name)}
+            text += ' ' + ' '.join(ast.unparse(value) for value in reachable(tree, names))
         if CHILD.search(text) or (PYTHON.search(text) and MODULE.search(text)):
             lines.append(node.lineno)
     return sorted(lines)
@@ -169,6 +178,17 @@ class DetectorTests(unittest.TestCase):
         self.assertEqual(bare_child_calls(module_level), [4])
         unpacked = "import subprocess\nCOMMON = ['ffmpeg', '-y']\nclass T:\n    def go(self):\n        subprocess.run([*COMMON, 'x'])\n"
         self.assertEqual(bare_child_calls(unpacked), [5])
+
+    def test_follows_chained_names_and_the_args_keyword(self):
+        chained = ("import subprocess\nNODE_COMMAND = ['node', '-e', '0']\ndef go():\n    command = NODE_COMMAND\n"
+                   "    subprocess.run(command)\n")
+        self.assertEqual(bare_child_calls(chained), [5])
+        keyword = "import subprocess\ndef go():\n    command = ['ffmpeg', 'x']\n    subprocess.run(args=command)\n"
+        self.assertEqual(bare_child_calls(keyword), [4])
+        self.assertEqual(bare_child_calls("import subprocess\nsubprocess.Popen(args=['node', '-e', 's'])\n"), [2])
+        self.assertEqual(bare_child_calls("import subprocess\nsubprocess.run(args=['git', 'init'])\n"), [])
+        cycle = "import subprocess\na = b\nb = a\nsubprocess.run(a)\n"
+        self.assertEqual(bare_child_calls(cycle), [])
 
     def test_follows_import_aliases_and_direct_imports(self):
         aliased = "import subprocess as sp\nsp.run(['node', '-e', 's'])\n"

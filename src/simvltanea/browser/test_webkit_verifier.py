@@ -364,6 +364,46 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
                 self.assertFalse(summary['pass'], summary)
                 self.assertEqual(summary['resourceErrors']['expectedTeardown'], [])
 
+    def test_hidden_standby_needs_a_null_foreground_start_and_no_foreground_flag(self):
+        # foregroundSince == null is its own term of hiddenStandby: a deck whose foreground flag is already false but
+        # that has a recorded foreground start (including 0) has been visible and is not a hidden standby.
+        for label, progress in (
+            ('foreground start recorded', '{foreground: false, foregroundSince: 182000}'),
+            ('foreground start at zero', '{foreground: false, foregroundSince: 0}'),
+        ):
+            with self.subTest(label):
+                summary = classify_resources(TEARDOWN_BLOB
+                    + f"result.samples.at(-1).decks[0].progress = {progress};")
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['expectedTeardown'], [])
+        for label, progress in (
+            ('null foreground start', '{foreground: false, foregroundSince: null}'),
+            ('absent foreground start', '{foreground: false}'),
+        ):
+            with self.subTest(label):
+                summary = classify_resources(TEARDOWN_BLOB
+                    + f"result.samples.at(-1).decks[0].progress = {progress};")
+                self.assertTrue(summary['pass'], summary)
+                self.assertEqual(len(summary['resourceErrors']['expectedTeardown']), 1)
+
+    def test_teardown_age_bound_comes_from_the_first_sighting_of_the_same_id_and_deck(self):
+        # The same URL on another id or deck, seen long before, must not stand in for this deck's first sighting.
+        for label, deck in (
+            ('other id', "{id: 'loop-2', deck: 1, active: false, populated: true, src: teardownUrl}"),
+            ('other deck', "{id: 'loop-1', deck: 0, active: false, populated: true, src: teardownUrl}"),
+        ):
+            with self.subTest(label):
+                summary = classify_resources(TEARDOWN_BLOB
+                    + f"(result.samples[result.samples.length - 60].decks ||= []).push({deck});")
+                self.assertTrue(summary['pass'], summary)
+                self.assertEqual(len(summary['resourceErrors']['expectedTeardown']), 1)
+        # The same id and deck seen long before is a hung load.
+        summary = classify_resources(TEARDOWN_BLOB
+            + "(result.samples[result.samples.length - 60].decks ||= []).push({id: 'loop-1', deck: 1, active: false,"
+            " populated: true, src: teardownUrl});")
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['expectedTeardown'], [])
+
     def test_hidden_preparation_cancellation_requires_verified_same_source_admission(self):
         cases = (
             {'id': 'loop-2', 'before': 38178, 'error': 38504, 'first': 38429,
@@ -567,6 +607,33 @@ for (const row of parkRows) {
         summary = self.classify_observer_gap(case=long_gap)
         self.assertFalse(summary['pass'], summary)
         self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
+    def test_the_five_second_bridge_bound_is_inclusive(self):
+        # The gap is the one between the row at visible + 700 and the promoted row (see PARKED_BLOB).
+        edge = self.OBSERVER_GAP_CASE['visible'] + 700
+        admitted = self.classify_observer_gap(case=dict(self.OBSERVER_GAP_CASE, promoted=edge + 5000))
+        self.assertTrue(admitted['pass'], admitted)
+        self.assertEqual(admitted['resourceErrors']['admittedPreparations'][0]['promotedAt'], edge + 5000)
+        refused = self.classify_observer_gap(case=dict(self.OBSERVER_GAP_CASE, promoted=edge + 5001))
+        self.assertFalse(refused['pass'], refused)
+        self.assertEqual(refused['resourceErrors']['admittedPreparations'], [])
+
+    def test_the_simulation_clock_must_advance_ninety_percent_of_the_gap(self):
+        # 2000 ms gap (promoted 44896): 1800 ms of simulated time is the floor.
+        def with_sim_advance(advance_ms: int) -> dict:
+            return self.classify_observer_gap(
+                "parkRows.at(-2).simTime = 10; parkRows.at(-1).simTime = 10 + %s / 1000;" % advance_ms)
+        self.assertTrue(with_sim_advance(1820)['pass'])
+        self.assertFalse(with_sim_advance(1780)['pass'])
+        self.assertEqual(with_sim_advance(1780)['resourceErrors']['admittedPreparations'], [])
+        # Exact floor, in binary-exact seconds: 5000 ms gap, 4.5 s of simulated time.
+        edge = self.OBSERVER_GAP_CASE['visible'] + 700
+        case = dict(self.OBSERVER_GAP_CASE, promoted=edge + 5000)
+        exact = self.classify_observer_gap("parkRows.at(-2).simTime = 0; parkRows.at(-1).simTime = 4.5;", case)
+        self.assertTrue(exact['pass'], exact)
+        short = self.classify_observer_gap("parkRows.at(-2).simTime = 0; parkRows.at(-1).simTime = 4.4375;", case)
+        self.assertFalse(short['pass'], short)
+        self.assertEqual(short['resourceErrors']['admittedPreparations'], [])
 
     def test_a_gap_before_the_frames_and_visibility_are_proven_is_never_bridged(self):
         # The observer exception covers promotion only; the pre-visibility evidence stays continuous.

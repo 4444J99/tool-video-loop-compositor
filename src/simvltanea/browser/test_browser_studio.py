@@ -2052,6 +2052,14 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertIn(f'{self.origin}/bad/library/manifest.json', page.requests)
         self.assertEqual(self.clip_requests(page), [])
 
+    def test_a_legacy_link_keeps_its_roll_version_when_every_clip_fails(self):
+        page = self.open(query='?seed=5')
+        page.route('**/library/clips/*.mp4', lambda route: route.fulfill(status=404))
+        page.reload()
+        page.wait_for_function('() => window.SimvltaneaStudio?.snapshot && SimvltaneaStudio.snapshot().source === "builtin"')
+        self.assertNotIn('rv=', page.evaluate('location.search'))
+        self.assertRegex(page.evaluate('location.search'), r'^\?seed=5')
+
     def test_gen_forces_the_generated_loops(self):
         page = self.open(query='?gen=1&seed=5')
         snapshot = self.snapshot(page)

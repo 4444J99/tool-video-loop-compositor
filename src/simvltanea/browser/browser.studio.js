@@ -1747,7 +1747,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
         if (count !== null) {
           selection = {seed: freshSeed(), family, loops: own.map((_, index) => index).slice(-count),
             style: selection ? selection.style : {z1: '2', jitter: '0', reverse: false}};
-          rollVersion = ROLL_VERSION; pendingRollVersion = null;
+          pendingRollVersion = ROLL_VERSION;
           writeUrl(null);
           launch();
         }
@@ -1912,7 +1912,9 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     library.prefetch = [];
     library.next = null;
     recordMode = 'pending';
-    rollVersion = ROLL_VERSION; pendingRollVersion = null;
+    // A link keeps the roll version it names; only a page that had no roll yet draws a current one.
+    pendingRollVersion = null;
+    if (!selection) rollVersion = ROLL_VERSION;
     selection = rollFor(selection ? selection.seed : freshSeed());
     writeUrl(null);
     renderControls();

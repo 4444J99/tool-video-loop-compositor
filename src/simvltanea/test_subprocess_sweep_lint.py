@@ -104,10 +104,21 @@ def program_of(command: ast.AST, tree: ast.AST) -> str | None:
 def bare_child_calls(source: str) -> list[int]:
     """Line numbers of subprocess calls that spawn a render, ffmpeg or node child without the retry helper."""
     tree = ast.parse(source)
+    modules, functions = {'subprocess'}, set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.asname for alias in node.names if alias.name == 'subprocess' and alias.asname)
+        elif isinstance(node, ast.ImportFrom) and node.module == 'subprocess':
+            functions.update(alias.asname or alias.name for alias in node.names if alias.name in BARE)
     lines = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in BARE
-                and isinstance(node.func.value, ast.Name) and node.func.value.id == 'subprocess'):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        through_module = isinstance(func, ast.Attribute) and func.attr in BARE \
+            and isinstance(func.value, ast.Name) and func.value.id in modules
+        through_import = isinstance(func, ast.Name) and func.id in functions
+        if not (through_module or through_import):
             continue
         if node.args and program_of(node.args[0], tree) in OTHER_PROGRAMS:
             continue
@@ -158,6 +169,16 @@ class DetectorTests(unittest.TestCase):
         self.assertEqual(bare_child_calls(module_level), [4])
         unpacked = "import subprocess\nCOMMON = ['ffmpeg', '-y']\nclass T:\n    def go(self):\n        subprocess.run([*COMMON, 'x'])\n"
         self.assertEqual(bare_child_calls(unpacked), [5])
+
+    def test_follows_import_aliases_and_direct_imports(self):
+        aliased = "import subprocess as sp\nsp.run(['node', '-e', 's'])\n"
+        self.assertEqual(bare_child_calls(aliased), [2])
+        direct = "from subprocess import run\nrun(['ffmpeg', 'x'])\n"
+        self.assertEqual(bare_child_calls(direct), [2])
+        renamed = "from subprocess import check_output as out\nout(['ffprobe', 'x'])\n"
+        self.assertEqual(bare_child_calls(renamed), [2])
+        self.assertEqual(bare_child_calls("from subprocess import run\nrun(['git', 'init'])\n"), [])
+        self.assertEqual(bare_child_calls("def run(x):\n    pass\nrun(['node'])\n"), [])
 
     def test_leaves_the_helper_and_other_children_alone(self):
         self.assertEqual(bare_child_calls("retry.run(['ffmpeg', 'x'])\n"), [])

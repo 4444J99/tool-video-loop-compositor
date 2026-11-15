@@ -1235,9 +1235,13 @@ function applySlice(node) {
             retiredAt: wall, nativeError: nativeError ? {code: nativeError.code, message: nativeError.message} : null});
           if (this.proofRetired.length > 16) this.proofRetired.shift();
         }
+        // load() starts the native cancellation of the blob read, and the runner can receive that failure before this
+        // function returns. Stamp the retirement before the cancel can begin so a cancelled read always follows it.
+        const retiringAt = performance.now();
         deck.media.pause(); deck.media.removeAttribute('src'); deck.media.load();
         if (this.proof) this.record('resource-retired', deck.media.dataset.loopId, {role: 'deck', url: deck.url,
-          currentSrc: deck.media.currentSrc, readyState: deck.media.readyState, paused: deck.media.paused});
+          currentSrc: deck.media.currentSrc, readyState: deck.media.readyState, paused: deck.media.paused,
+          wall: retiringAt});
         URL.revokeObjectURL(deck.url); deck.url = null;
       }
       deck.item = null;

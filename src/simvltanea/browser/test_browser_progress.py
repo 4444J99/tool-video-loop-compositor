@@ -102,6 +102,29 @@ s=session.proofProgressSummary(3000,true);assert.equal(s.retired.length,16);
 assert.equal(s.retiredCount,21);assert.equal(s.maxGapMs,2400);
 ''')
 
+    def test_retirement_is_stamped_before_load_starts_the_native_cancel(self):
+        # Forced timing: load() is slow (it advances the clock 27 ms before returning) and the cancelled read is
+        # reported to the runner at the instant load() begins. The retirement record must not be later than that.
+        self.run_js('''
+let wall=5000;Object.defineProperty(globalThis,'performance',{value:{now:()=>wall}});
+const p=new FrameProgress(true);p.assign('blob:a',0);p.setForeground(true,0,true);p.observe(0,0);
+let cancelAt=null;
+const media={dataset:{loopId:'one'},style:{},error:null,pause(){},removeAttribute(){},
+  load(){cancelAt=wall;wall+=27;},readyState:0,currentSrc:'',paused:true};
+const deck={media,url:'blob:a',progress:p,proofDeck:0};
+const node={id:'one',active:deck,decks:[deck],box:{style:{}}};
+const session=Object.create(Session.prototype);Object.assign(session,{proof:true,proofRetired:[],
+  proofRetiredCount:0,proofMaxGapMs:0,slots:new Map([['one',node]]),nodes:new Map([['one',node]]),
+  events:[],clock:{simTime:0},updateNodeAudio(){}});
+session.unload(deck);
+const retired=session.events.find(event=>event.type==='resource-retired');
+assert.ok(retired,'unload recorded no retirement');
+assert.equal(retired.url,'blob:a');assert.equal(retired.id,'one');
+assert.equal(cancelAt,5000);
+assert.ok(retired.wall<=cancelAt,'retirement stamped '+(retired.wall-cancelAt)+' ms after the cancel began');
+assert.equal(retired.readyState,0);assert.equal(retired.paused,true);
+''')
+
 
 class NativeFrameProgressTests(unittest.TestCase):
     @classmethod

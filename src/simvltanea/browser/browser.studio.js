@@ -1690,11 +1690,13 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       const finish = result => {
         clearTimeout(timer);
         video.onloadeddata = video.onerror = null;
+        // Stamp before load() begins the native cancellation (see Session.unload).
+        const retiringAt = performance.now();
         video.pause();
         video.removeAttribute('src');
         video.load();
         if (live.proof) live.record('resource-retired', null, {role: 'metadata', url,
-          currentSrc: video.currentSrc, readyState: video.readyState, paused: video.paused});
+          currentSrc: video.currentSrc, readyState: video.readyState, paused: video.paused, wall: retiringAt});
         URL.revokeObjectURL(url);
         resolve(result);
       };

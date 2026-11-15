@@ -259,7 +259,8 @@ function classifyResourceErrors(result) {
   // Include them only in resource evidence, never in sustained timing/progress.
   const observations = [...(result.prelude?.samples || []), ...(result.samples || [])];
   const evidence = {...result, samples: observations};
-  const classified = {expectedRetirements: [], expectedAborts: [], recoveredReads: [], admittedPreparations: [], unexpected: []};
+  const classified = {expectedRetirements: [], expectedAborts: [], expectedTeardown: [], recoveredReads: [],
+    admittedPreparations: [], unexpected: []};
   const nativeBlobError = /^The operation couldn[’']t be completed\. \(WebKitBlobResource error 1\.\)$/;
   for (const kind of ['consoleErrors', 'requestFailures']) {
     for (const [index, error] of (result[kind] || []).entries()) {
@@ -292,6 +293,17 @@ function classifyResourceErrors(result) {
       if (retired) {
         classified.expectedRetirements.push({...reference, role: retired.role, id: retired.id,
           retiredAt: retired.wall, lagMs: wall - retired.wall});
+        continue;
+      }
+      // browser.close() cancels every read still in flight. A cancelled read stamped in the closing phase, after the
+      // final observation, for a source that observation shows populated on a deck and that was never retired, is the
+      // harness tearing the document down, not playback failing. A closing-phase failure with no such positive
+      // ownership evidence (another URL, a retired URL, an unobserved URL, an earlier phase) stays unexpected.
+      const finalRow = observations.at(-1);
+      if (blob && cancelled && error.phase === 'closing' && error.method === 'GET' && finalRow && wall >= finalRow.wall &&
+          (finalRow.decks || []).some(deck => deck.populated && deck.src === url) &&
+          !(result.events || []).some(event => event?.type === 'resource-retired' && event.url === url)) {
+        classified.expectedTeardown.push({...reference, finalObservedAt: finalRow.wall, lagMs: wall - finalRow.wall});
         continue;
       }
       // A cancelled internal read can coexist with successful decoding. Require

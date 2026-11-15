@@ -154,6 +154,16 @@ result.requestFailures = [{wall: parkedCase.error, url: parkedUrl, method: 'GET'
 '''
 
 
+TEARDOWN_BLOB = r'''
+// Run 43702981423: a standby deck still loading at the final sample is cancelled when browser.close() runs.
+const teardownUrl = 'blob:http://127.0.0.1/standby-at-close';
+result.samples[result.samples.length - 1].decks = [{id: 'loop-1', deck: 1, active: false, populated: true,
+  src: teardownUrl, currentSrc: teardownUrl, ready: 0, nativeError: null}];
+result.requestFailures = [Object.freeze({wall: 182800, phase: 'closing', url: teardownUrl, method: 'GET',
+  resourceType: 'other', failure: {errorText: 'cancelled'}})];
+Object.freeze(result.requestFailures);
+'''
+
 PARKED_THEN_RETIRED_BLOB = r'''
 // Native run 42457345385 held-source timings: the later ordinary retirement
 // must not invalidate a separately proven earlier preparation/admission.
@@ -307,6 +317,34 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
         self.assertTrue(summary['pass'], summary)
         self.assertEqual(len(summary['resourceErrors']['expectedAborts']), 1)
         self.assertEqual(summary['resourceErrors']['expectedAborts'][0]['lagMs'], 100)
+
+    def test_browser_close_cancelling_a_populated_source_is_teardown_not_a_playback_error(self):
+        summary = classify(TEARDOWN_BLOB)
+        self.assertTrue(summary['pass'], summary)
+        errors = summary['resourceErrors']
+        self.assertEqual(errors['unexpected'], [])
+        self.assertEqual(len(errors['expectedTeardown']), 1)
+        self.assertEqual(errors['expectedTeardown'][0]['url'], 'blob:http://127.0.0.1/standby-at-close')
+        self.assertEqual(errors['expectedTeardown'][0]['finalObservedAt'], 181860)
+
+    def test_teardown_proof_requires_closing_phase_final_ownership_and_no_retirement(self):
+        for mutation in (
+            "result.requestFailures = [{...result.requestFailures[0], phase: 'sustained'}];",
+            "result.requestFailures = [{...result.requestFailures[0], phase: undefined}];",
+            "result.requestFailures = [{...result.requestFailures[0], wall: 181000}];",
+            "result.requestFailures = [{...result.requestFailures[0], method: 'POST'}];",
+            "result.requestFailures = [{...result.requestFailures[0], failure: {errorText: 'network failed'}}];",
+            "result.requestFailures = [{...result.requestFailures[0], url: 'blob:http://127.0.0.1/other'}];",
+            "result.requestFailures = [{...result.requestFailures[0], url: 'http://127.0.0.1/library/clip.mp4'}];",
+            "result.samples.at(-1).decks[0].populated = false;",
+            "result.samples.at(-1).decks[0].src = '';",
+            "result.events.push({type: 'resource-retired', role: 'deck', id: 'loop-1', url: teardownUrl, wall: 100000,"
+            " readyState: 0, paused: true});",
+        ):
+            with self.subTest(mutation=mutation):
+                summary = classify_resources(TEARDOWN_BLOB + mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['expectedTeardown'], [])
 
     def test_hidden_preparation_cancellation_requires_verified_same_source_admission(self):
         cases = (

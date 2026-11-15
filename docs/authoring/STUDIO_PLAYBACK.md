@@ -68,7 +68,11 @@ A loop-mode toggle whose handoff is deferred keeps the exact old variant and the
 re-attempts: after one outgoing loop (1 to 8 seconds), at most twice, recording
 `handoff-reattempt`. Any other edit is a newer intent and cancels the pending
 attempt, a paused, held or hidden page waits without spending an attempt, and a
-deferral past the bound leaves the mixed field until the next edit.
+deferral past the bound leaves the mixed field. An edit that keeps the deferred
+panel in its slot (re-rolling another panel, cycling the family or changing the
+count) does not repair it: the slot keeps its retained old variant, as
+`test_browser_studio_deferred_recovery` pins. Toggling the loop mode again,
+re-rolling that panel, or shuffling replaces it.
 
 Selection, share links and export metadata are committed from the residents that
 actually remain after a change. A deferred panel does not undo successful changes

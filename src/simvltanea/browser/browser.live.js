@@ -693,6 +693,7 @@ function applySlice(node) {
       try {
         while (this.pending && !this.disposed) {
           const request = this.pending; this.pending = null;
+          request.deferred ??= new Set();
           const controller = this.controller = new AbortController();
           let success = true;
           try {

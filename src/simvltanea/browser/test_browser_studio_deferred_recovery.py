@@ -70,8 +70,9 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
         self.tap(page, '#loop-mode')
         self.wait_deferred(page)
         self.assertEqual(page.evaluate('SimvltaneaStudio.snapshot().loopMode'), 'forward')
-        # The fault applies to the first incoming clip only: the condition has
-        # cleared by the time a bounded re-attempt runs. No edit is made here.
+        # The blocking condition clears (the stalled element plays again). No
+        # further edit is made: the studio itself must re-attempt the handoff.
+        page.evaluate('restoreSettlementFault()')
         page.wait_for_function(f"() => {BOOMERANG}==={forward!r}", timeout=30000)
         self.settled(page)
         result = self.report(page, 'deferred-loop-mode-recovery')

@@ -1237,7 +1237,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
 
   /* Compile layout/export metadata, then reconcile residents in place. The live
    * session owns native loops; editing metadata never restarts its global clock. */
-  async function launch({atLoopBoundary = false, shareMix} = {}) {
+  async function launch({atLoopBoundary = false, shareMix, repair = null} = {}) {
     const bounded = boundedSelection(selection);
     if (bounded !== selection) { selection = bounded; renderControls(); }
     const token = ++launches, r = runtime(), requested = selection, sourcePool = pool();
@@ -1294,14 +1294,14 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
         // its export waiters pending, just as for a library fetch below.
         await builtinRecording;
         if (!ownsIntent()) return false;
-        if (itemsReady(items)) return launch({atLoopBoundary, shareMix});
+        if (itemsReady(items)) return launch({atLoopBoundary, shareMix, repair});
       } else if (usingLibrary() && items.length) {
         const ok = await loadClips(items);
         if (token !== launches) return false;
         // A local import can change pools while this library fetch is pending.
         // Its completed batch owns the next launch, never the partial pool.
         if (pool() !== sourcePool) { finish(); return false; }
-        if (ok) return launch({atLoopBoundary, shareMix});
+        if (ok) return launch({atLoopBoundary, shareMix, repair});
         repairSelection();
       }
       finish();
@@ -1357,6 +1357,10 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       renderControls();
       if (r.ready) studio.dataset.phase = 'playing';
       if (usingLibrary()) prefetchNext();
+      // A deferral keeps the exact old variant, and nothing else would revisit
+      // it. A loop-mode toggle re-attempts the handoff a bounded number of times.
+      if (repair?.attempts > 0 && !completed && changed)
+        scheduleLoopModeRepair(token, repair.attempts, actualItems);
       return completed;
     } catch (error) {
       if (token === launches && error.name !== 'AbortError') toast(oneLine(error.message || error));
@@ -1364,6 +1368,37 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     } finally {
       finish();
     }
+  }
+  // The toggle's own handoff can be deferred when the incoming clip never
+  // presented fresh frames in time (a starved page). The studio then describes
+  // the exact mixed field, which is correct, but nothing would revisit it and
+  // the field would stay mixed until the next edit. Re-attempt after one outgoing loop
+  // (frames that were not ready then usually are now), at most
+  // LOOP_MODE_REPAIR_ATTEMPTS times, while the toggle is still the newest intent:
+  // any other launch bumps `launches` and cancels the pending attempt, and a
+  // second deferral past the bound keeps today's mixed outcome.
+  const LOOP_MODE_REPAIR_ATTEMPTS = 2;
+  let repairTimer = null;
+  function scheduleLoopModeRepair(token, attempts, resident) {
+    clearTimeout(repairTimer);
+    const loopSeconds = Math.max(0, ...resident.map(item => Number(item.quantized?.duration) || 0));
+    const delayMs = Math.min(8000, Math.max(1000, loopSeconds * 1000));
+    const attempt = () => {
+      repairTimer = null;
+      if (token !== launches || !selection) return;
+      // Paused, held or hidden pages cannot present fresh frames: wait, without
+      // spending an attempt, until the studio is running again.
+      if (document.hidden || hold || paused) { repairTimer = setTimeout(attempt, delayMs); return; }
+      const stale = [...(selection.retained || [])].filter(([, item]) =>
+        item.clip && item.asset && item.asset.id !== assetFor(item).id);
+      if (!stale.length) return;
+      const retained = new Map(selection.retained);
+      for (const [slot] of stale) retained.delete(slot);
+      selection = {...selection, retained};
+      runtime()?.record('handoff-reattempt', null, {slots: stale.map(([slot]) => slot), remaining: attempts - 1});
+      launch({shareMix: true, repair: {attempts: attempts - 1}});
+    };
+    repairTimer = setTimeout(attempt, delayMs);
   }
   function guardAll() { const r = runtime(); if (r) for (const node of r.nodes.values()) guardMute(node.media); }
 
@@ -2112,7 +2147,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     if (selection) selection = {...selection, retained: new Map()};
     const params = new URLSearchParams(root.location.search); params.set('loop', loopMode);
     history.replaceState(null, '', `${root.location.pathname}?${params}`);
-    renderActivity(); launch({shareMix: true});
+    renderActivity(); launch({shareMix: true, repair: {attempts: LOOP_MODE_REPAIR_ATTEMPTS}});
   });
 
   // ---- Controls -------------------------------------------------------------------

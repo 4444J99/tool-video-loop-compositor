@@ -372,6 +372,31 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
                 self.assertEqual([frame['wall'] for frame in proof['frames']], case['frames'])
                 self.assertEqual(proof['promotedAt'], case['promoted'])
 
+    def test_standby_parked_before_its_first_frame_is_admitted_only_by_the_frames_that_follow(self):
+        # Local macOS WebKit parks a READY standby (ready 4, paused) with zero frame callbacks, then decodes normally
+        # once resumed. The park itself proves nothing; the later owned frames and the promotion still do.
+        zero = r'''
+for (const row of parkRows) {
+  const deck = row.decks[1];
+  if (deck.paused && row.nodes[0].phase === 'READY') {
+    Object.assign(deck.progress, {changes: 0, sourceChanges: 0, lastChangeWall: null, mediaTime: null, trace: []});
+    deck.decoded = null;
+  }
+}
+'''
+        summary = classify_resources(PARKED_BLOB + zero)
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(len(summary['resourceErrors']['admittedPreparations']), 1)
+        for refusal in (
+            "for (const row of parkRows) if (row.decks[1].progress.foreground) row.decks[1].progress.trace = [];",
+            "parkRows.forEach(row => { if (row.decks[1].paused) row.decks[1].progress.sourceChanges = -1; });",
+            "parkRows.forEach(row => { if (row.decks[1].paused) row.decks[1].progress.sourceChanges = 1.5; });",
+        ):
+            with self.subTest(refusal=refusal):
+                summary = classify_resources(PARKED_BLOB + zero + refusal)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
     def test_proven_later_retirement_preserves_prior_preparation_admission(self):
         summary = classify_resources(PARKED_THEN_RETIRED_BLOB)
         self.assertTrue(summary['pass'], summary)

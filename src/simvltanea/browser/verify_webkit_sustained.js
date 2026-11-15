@@ -179,7 +179,11 @@ function admittedPreparation(result, error, expectedRetirements) {
     state.progress.maxGapMs === 0 && state.progress.currentGapMs === 0;
   const parked = state => hidden(state) && state.node.phase === 'READY' && state.deck.paused === true &&
     state.deck.seeking === false && state.deck.ready >= 3 && state.deck.currentSrc === url &&
-    state.progress.sourceChanges >= 1;
+    Number.isSafeInteger(state.progress.sourceChanges) && state.progress.sourceChanges >= 0;
+  // A parked standby need not have presented a frame yet: macOS WebKit parks READY (ready 4, paused) with zero frame
+  // callbacks (local runs, loops 2 and 4, fresh/seeded phases). The admission proof does not rest on a frame before the
+  // park; it rests on what follows, which stays required: unchanged park state, resumption, two distinct decoded
+  // frames owned by this deck before it becomes visible, and promotion to the same source epoch.
   const prior = context(before), initial = context(after);
   if (!hidden(prior) || !['PRIMING', 'READY'].includes(prior.node.phase) || !parked(initial) ||
       (prior.deck.currentSrc !== url && !(prior.node.phase === 'PRIMING' &&

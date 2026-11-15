@@ -1486,10 +1486,16 @@ class StudioLibraryTests(unittest.TestCase):
 
     def test_filter_bypass_url_is_retained_through_shuffle(self):
         page = self.open(query='?seed=99&mix=s0.1&fx=0&evolve=0')
-        self.showing(page, self.snapshot(page)['selection'])
+        self.showing(page, self.settled(page)['selection'])
         self.assertFalse(self.snapshot(page).get('filters', True))
+        before = self.snapshot(page)
         self.tap(page, '#shuffle')
-        self.showing(page, self.snapshot(page)['selection'])
+        # The shuffle request is asynchronous: reading the selection straight
+        # after the click can still return the pre-shuffle roll, and a surviving
+        # resident keeps its slot, so wait for the new seed and follow the
+        # accepted (not the requested) order.
+        page.wait_for_function('seed=>SimvltaneaStudio.snapshot().seed!==seed', arg=before['seed'])
+        self.showing(page, self.settled(page)['selection'])
         self.assertIn('fx=0', page.evaluate('location.search'))
         self.assertTrue(page.evaluate('''() => [...compositionRuntime.nodes.values()]
           .every(n=>n.media.style.filter==='')'''))

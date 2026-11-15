@@ -10,6 +10,7 @@ import threading
 import pytest
 
 from simvltanea.lab.tests.e2e.helpers import APP, DATA, FIXTURES, ROOT
+from simvltanea.browser import silent_launch
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -55,7 +56,7 @@ def browser():
     with sync_playwright() as p:
         # Same sandbox and shared-memory flags as the other browser suites (GitHub-hosted Ubuntu 24.04 runners).
         args = ["--autoplay-policy=no-user-gesture-required", "--no-sandbox", "--disable-dev-shm-usage"]
-        b = p.chromium.launch(executable_path=exe, headless=True, args=args)
+        b = silent_launch(p.chromium, executable_path=exe, headless=True, args=args)
         yield b
         b.close()
 

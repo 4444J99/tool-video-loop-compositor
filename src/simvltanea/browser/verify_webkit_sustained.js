@@ -10,6 +10,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {once} = require('node:events');
+const {silentLaunch} = require('./silent_browser.js');
 const DURATION_MS = 180000, SAMPLE_MS = 137, MAX_HOLD_MS = 2000;
 // A hosted macOS runner can stall a native decoder for 2 to 3 s once or twice in a 3 minute run and
 // then recover. The running maximum a hold leaves behind must not condemn the whole run: a hold of at
@@ -692,7 +693,7 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
   };
   try {
     await journal.append('run', {name, progressSchema: result.progressSchema, requestedUrl: result.requestedUrl});
-    browser = await webkit.launch({headless: true}); result.browserVersion = browser.version();
+    browser = await silentLaunch(webkit, {headless: true}); result.browserVersion = browser.version();
     const context = await browser.newContext(device); page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
     if (diagnostic?.initialize) await diagnostic.initialize(page, result, diagnostic.options);
@@ -766,7 +767,7 @@ async function audioProof(webkit, out) {
   const result = {kind: 'native OfflineAudioContext rendered sample peak; not true peak'};
   let browser;
   try {
-    browser = await webkit.launch({headless: true}); const page = await browser.newPage();
+    browser = await silentLaunch(webkit, {headless: true}); const page = await browser.newPage();
     await page.addScriptTag({path: path.join(__dirname, 'browser.audio.js')});
     Object.assign(result, await page.evaluate(async () => {
       if (typeof OfflineAudioContext !== 'function') throw new Error('Native OfflineAudioContext unavailable');
@@ -794,7 +795,7 @@ async function controls(webkit, device, base, out) {
   const result = {progressSchema: 1, errors: [], consoleErrors: [], httpErrors: [], requestFailures: [], samples: [], checks: {}};
   let browser, page, stopSampling = async () => {};
   try {
-    browser = await webkit.launch({headless: true});
+    browser = await silentLaunch(webkit, {headless: true});
     const context = await browser.newContext(device); page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
     result.phase = 'navigation';

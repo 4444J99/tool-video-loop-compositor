@@ -25,6 +25,7 @@ from unittest.mock import patch
 import simvltanea.authoring.composition as c
 from simvltanea.browser.browser_runtime import build_preview, compile_plan
 from simvltanea.generators.make_runtime_fixture import HERE, ROOT, prepare
+from simvltanea.browser.silent_browser import silent_launch
 
 
 def browser_executable() -> str:
@@ -273,7 +274,7 @@ class BrowserTests(unittest.TestCase):
         cls.thread=threading.Thread(target=cls.server.serve_forever,kwargs={'poll_interval':0.05},daemon=True);cls.thread.start()
         cls.pw=sync_playwright().start()
         executable=browser_executable()
-        cls.browser=cls.pw.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
+        cls.browser=silent_launch(cls.pw.chromium, executable_path=executable,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
         cls.base=f'http://127.0.0.1:{cls.server.server_port}'
         cls.transport=os.environ.get('PORTVS_BROWSER_TRANSPORT','http')
         if cls.transport not in ('http','in-memory'):raise ValueError('Unknown browser transport')

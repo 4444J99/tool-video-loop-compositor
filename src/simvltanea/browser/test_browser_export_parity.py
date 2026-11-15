@@ -49,6 +49,7 @@ import simvltanea.authoring.composition as c
 from simvltanea.browser.browser_runtime import build_preview
 from simvltanea.browser.test_browser_runtime import browser_executable
 from simvltanea.generators.make_runtime_fixture import RAMP_SIZE, ROOT, prepare, ramp_row, ramp_tint
+from simvltanea.browser.silent_browser import silent_launch
 
 REPO = Path(__file__).resolve().parents[3]
 COUNTS = (1, 5, 12)
@@ -352,7 +353,7 @@ class BrowserExportParityTests(unittest.TestCase):
         cls.thread.start()
         cls.base = f'http://127.0.0.1:{cls.server.server_port}'
         cls.playwright = sync_playwright().start()
-        cls.browser = cls.playwright.chromium.launch(
+        cls.browser = silent_launch(cls.playwright.chromium, 
             executable_path=browser_executable(), headless=True,
             args=['--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required'])
         cls.measured = {}

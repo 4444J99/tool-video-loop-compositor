@@ -1,0 +1,44 @@
+/* Launch every Playwright browser through here so no run can make a sound. Node twin of silent_browser.py: same
+ * rule, same silent_init.js. Chromium gets --mute-audio merged into the caller's arguments, and every context
+ * (newContext, and newPage, which makes its own) gets the init script that pins media muted at volume 0 and puts
+ * a gain-0 sink in front of every realtime AudioContext destination. */
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const INIT_SCRIPT_PATH = path.join(__dirname, 'silent_init.js');
+const MUTE_ARGS = ['--mute-audio'];
+const initScript = () => fs.readFileSync(INIT_SCRIPT_PATH, 'utf8');
+
+const engineName = engine => (typeof engine.name === 'function' ? engine.name() : engine.name);
+
+function silentArgs(name, args = []) {
+  const merged = [...args];
+  if (name === 'chromium') for (const flag of MUTE_ARGS) if (!merged.includes(flag)) merged.push(flag);
+  return merged;
+}
+
+async function silenceContext(context) {
+  await context.addInitScript({path: INIT_SCRIPT_PATH});
+  return context;
+}
+
+function silenceBrowser(browser) {
+  if (browser.__silentBrowser) return browser;
+  const newContext = browser.newContext.bind(browser), newPage = browser.newPage.bind(browser);
+  browser.newContext = async (...args) => silenceContext(await newContext(...args));
+  browser.newPage = async (...args) => { const page = await newPage(...args); await silenceContext(page.context()); return page; };
+  browser.__silentBrowser = true;
+  return browser;
+}
+
+async function silentLaunch(engine, options = {}) {
+  return silenceBrowser(await engine.launch({...options, args: silentArgs(engineName(engine), options.args)}));
+}
+
+async function silentLaunchPersistentContext(engine, userDataDir, options = {}) {
+  return silenceContext(await engine.launchPersistentContext(userDataDir, {...options, args: silentArgs(engineName(engine), options.args)}));
+}
+
+module.exports = {INIT_SCRIPT_PATH, MUTE_ARGS, initScript, silentArgs, silenceContext, silenceBrowser, silentLaunch, silentLaunchPersistentContext};

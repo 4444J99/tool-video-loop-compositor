@@ -2,6 +2,7 @@
 from pathlib import Path
 from simvltanea import subprocess_retry as retry
 import unittest
+from simvltanea.browser.silent_browser import silent_launch
 
 LIVE = Path(__file__).with_name('browser.live.js')
 
@@ -110,7 +111,7 @@ class NativeFrameProgressTests(unittest.TestCase):
         from simvltanea.browser.test_browser_studio import prepare_fixtures
         cls.fixtures = prepare_fixtures()
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=browser_executable(), headless=True,
                                            args=['--no-sandbox', '--disable-dev-shm-usage'])
 
     @classmethod

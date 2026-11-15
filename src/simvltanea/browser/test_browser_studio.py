@@ -44,6 +44,7 @@ from simvltanea.browser.test_browser_runtime import browser_executable
 from simvltanea.paths import WORK_DIR
 from tools.publishing.stage_library_site import stage_library_site
 from tools.verification.verify_public_site import private_path_fragments
+from simvltanea.browser.silent_browser import silent_launch
 
 STUDIO_JS = HERE / 'browser.studio.js'
 ROOT = WORK_DIR / 'browser-studio'
@@ -581,7 +582,7 @@ class StudioBrowserTests(unittest.TestCase):
         # The application root owns navigation; exercise the Studio itself here.
         cls.url = f'{cls.origin}/{SUBPATH}/watch.html'
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=browser_executable(), headless=True,
                                              args=['--no-sandbox', '--disable-dev-shm-usage'])
 
     @classmethod
@@ -1525,7 +1526,7 @@ class StudioLibraryTests(unittest.TestCase):
         cls.thread.start()
         cls.origin = f'http://127.0.0.1:{cls.server.server_port}'
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
+        cls.browser = silent_launch(cls.pw.chromium, executable_path=browser_executable(), headless=True,
                                              args=['--no-sandbox', '--disable-dev-shm-usage'])
 
     @classmethod

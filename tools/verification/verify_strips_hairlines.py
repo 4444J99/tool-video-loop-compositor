@@ -42,6 +42,7 @@ from tools.paths import PROOFS_DIR, require_in_var
 from PIL import Image, ImageChops
 from simvltanea.authoring import build_strips, strips_slice
 from simvltanea.browser import HERE, browser_runtime, compile_plan
+from simvltanea.browser import silent_launch
 
 ROOT = PROOFS_DIR / 'strips-raster'
 CLIP_WIDTH, CLIP_HEIGHT, CLIP_FPS, CLIP_SECONDS = 540, 720, 24, 4
@@ -202,7 +203,7 @@ class RasterProbe:
         self.base = f'http://127.0.0.1:{server.server_port}'
         playwright = sync_playwright().start()
         self._stack.callback(playwright.stop)
-        self.browser = playwright.chromium.launch(executable_path=self.executable or browser_executable(),
+        self.browser = silent_launch(playwright.chromium, executable_path=self.executable or browser_executable(),
                                                   headless=True, args=['--no-sandbox', '--disable-dev-shm-usage',
                                                                        '--autoplay-policy=no-user-gesture-required'])
         self._stack.callback(self.browser.close)

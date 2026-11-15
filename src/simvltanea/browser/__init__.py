@@ -11,6 +11,7 @@ from .browser_studio import (
     StudioStagingError,
     stage_studio,
 )
+from .silent_browser import silent_launch
 from .layout_bundle import (
     authored_layout_bundle,
     authored_layouts,
@@ -18,6 +19,7 @@ from .layout_bundle import (
 )
 
 __all__ = [
+    'silent_launch',
     'browser_runtime',
     'browser_studio',
     'layout_bundle',

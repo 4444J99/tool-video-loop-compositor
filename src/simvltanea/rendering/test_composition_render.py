@@ -10,7 +10,7 @@ import dataclasses
 import hashlib
 import importlib.util
 import json
-import subprocess
+from simvltanea import subprocess_retry as retry
 import sys
 import tempfile
 import unittest
@@ -240,7 +240,7 @@ class StateTests(unittest.TestCase):
             settings=r.build_settings(r.parse_args())
         self.assertEqual((settings.width,settings.height,settings.fps),(1080,1920,30))
         self.assertEqual(settings.audio_mode,'none');self.assertEqual(settings.timing_mode,'clip')
-        result=subprocess.run([sys.executable,str(HERE/'src'/'simvltanea'/'render_triptych.py'),'--state',str(ROOT/'state-3.json')],capture_output=True,text=True)
+        result=retry.run([sys.executable,str(HERE/'src'/'simvltanea'/'render_triptych.py'),'--state',str(ROOT/'state-3.json')],capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0); self.assertIn('explicit --orientation',result.stderr)
 
     def test_original_command_graph_compatibility(self):
@@ -277,12 +277,12 @@ class RenderTests(unittest.TestCase):
         output=ROOT/'renders/test-integration.mp4'
         command=[sys.executable,str(HERE/'src'/'simvltanea'/'render_triptych.py'),'--state',str(path),'--orientation','portrait',
                  '--width','360','--height','640','--preset','ultrafast','--output',str(output)]
-        done=subprocess.run(command,cwd=HERE,capture_output=True,text=True)
+        done=retry.run(command,cwd=HERE,capture_output=True,text=True)
         (ROOT/'evidence/integration.log').write_text(done.stdout+done.stderr)
         self.assertEqual(done.returncode,0,done.stderr)
         facts=probe(output);self.assertEqual(facts['streams'][0]['nb_frames'],'72')
         self.assertAlmostEqual(float(facts['format']['duration']),3)
-        raw=subprocess.run(['ffmpeg','-v','error','-i',str(output),'-f','rawvideo','-pix_fmt','rgb24','-'],capture_output=True,check=True).stdout
+        raw=retry.run(['ffmpeg','-v','error','-i',str(output),'-f','rawvideo','-pix_fmt','rgb24','-'],capture_output=True,check=True).stdout
         frame_bytes = 640 * 360 * 3
         cells=c.pixel_placements(s['layouts']['portrait'],360,640)
         def pixels(frame,cell):
@@ -396,9 +396,9 @@ class StripsRenderTests(unittest.TestCase):
         command = [sys.executable, '-m', 'simvltanea.rendering.render_triptych', '--state', str(path),
                    '--orientation', orientation, '--width', str(width), '--height', str(height),
                    '--preset', 'ultrafast', '--output', str(output)] + (['--crf', str(crf)] if crf is not None else [])
-        done = subprocess.run(command, cwd=HERE, capture_output=True, text=True)
+        done = retry.run(command, cwd=HERE, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr[-4000:])
-        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output), '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+        raw = retry.run(['ffmpeg', '-v', 'error', '-i', str(output), '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
                              capture_output=True, check=True).stdout
         frame = width * height * 3
         self.assertEqual(len(raw), frame * state['frames'])
@@ -411,7 +411,7 @@ class StripsRenderTests(unittest.TestCase):
         Measurements decode to yuv444p and convert here, so no FFmpeg RGB fast path
         (FFmpeg 9 biases red by about 2 levels from yuv420p) moves a ramp reading.
         """
-        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(self.output), '-vf', f'select=eq(n\\,{index})',
+        raw = retry.run(['ffmpeg', '-v', 'error', '-i', str(self.output), '-vf', f'select=eq(n\\,{index})',
                               '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'yuv444p', '-'],
                              capture_output=True, check=True).stdout
         plane = width * height
@@ -440,7 +440,7 @@ class StripsRenderTests(unittest.TestCase):
         background showing. Renders measured here use CRF 12, which keeps x264 noise on the
         sharp arc edges a few levels clear of the floor.
         """
-        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(self.output), '-vf', f'select=eq(n\\,{index})',
+        raw = retry.run(['ffmpeg', '-v', 'error', '-i', str(self.output), '-vf', f'select=eq(n\\,{index})',
                               '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-'],
                              capture_output=True, check=True).stdout
         plane, half = width * height, width // 2

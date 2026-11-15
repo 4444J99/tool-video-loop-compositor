@@ -1,6 +1,6 @@
 """Experimental source-isolated recovery for an observed native loop seek stall."""
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 LIVE = Path(__file__).with_name('browser.live.js')
@@ -28,7 +28,7 @@ const seek=(dt=.1)=>{n.media.seeking=true;current(n,0,undefined,dt)};
 
 class NativeLoopSeekTests(unittest.TestCase):
     def run_js(self, body):
-        result=subprocess.run(['node','-e',FIXTURE+body,str(LIVE)],capture_output=True,text=True)
+        result=retry.run(['node','-e',FIXTURE+body,str(LIVE)],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         return result
 

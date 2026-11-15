@@ -1,5 +1,5 @@
 """Retain a witnessed native wrap when the clock outruns decoded frames."""
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 from simvltanea.browser.test_browser_loop_seek import FIXTURE, LIVE
@@ -7,7 +7,7 @@ from simvltanea.browser.test_browser_loop_seek import FIXTURE, LIVE
 
 class AdvancingLoopWrapTests(unittest.TestCase):
     def run_js(self, body):
-        result = subprocess.run(
+        result = retry.run(
             ['node', '-e', FIXTURE + body, str(LIVE)],
             capture_output=True, text=True,
         )
@@ -309,7 +309,7 @@ class CallbackEndFrameTests(unittest.TestCase):
     """Native run 43474710487: a slow host tick skipped the clip's end window."""
 
     def run_js(self, body):
-        result = subprocess.run(
+        result = retry.run(
             ['node', '-e', FIXTURE + body, str(LIVE)],
             capture_output=True, text=True,
         )

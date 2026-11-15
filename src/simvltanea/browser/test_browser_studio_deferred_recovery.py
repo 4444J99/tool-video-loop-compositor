@@ -147,7 +147,6 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
         self.settled(page)
         self.assertEqual(page.evaluate('decodeFailures'), 1, 'a failing asset must not be retried')
         self.assertEqual(self.deferrals(page), 0)
-        print('DBG', page.evaluate("compositionRuntime.events.map(e=>e.type+'@'+Math.round(e.wall||0))"))
         self.assertEqual(page.evaluate("compositionRuntime.events.filter(e=>e.type==='handoff-reattempt').length"), 0)
         self.assertEqual(self.loop_one_asset(page), boomerang)
 

@@ -1481,10 +1481,14 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       rolled = {...rolled, family, loops: moreLoops([], count, family)};
     }
     selection = rolled;
+    // A user edit owns the field: a pending repair must not outlive it, even if
+    // the edit is refused or reverted and the intent happens to match again.
+    clearTimeout(repairTimer); repairTimer = null;
     renderControls();
     launch({shareMix: manualPopulation});
   }
   function edited() {
+    clearTimeout(repairTimer); repairTimer = null;
     renderControls();
     launch({shareMix: true});
   }

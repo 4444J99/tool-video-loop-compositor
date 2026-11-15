@@ -5,7 +5,7 @@ import hashlib
 import json
 import mimetypes
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import time
 import unittest
 from urllib.parse import urlparse
@@ -30,7 +30,7 @@ const S=require(process.argv[1] + '/browser.studio.js');
 const supported=typeof S.effectSettingsFromSearch==='function' && typeof S.effectSettingsSearch==='function';
 if(!supported){console.log(JSON.stringify({supported}));process.exit(0);}
 """ + body
-    result = subprocess.run(['node', '-e', script, str(HERE)], capture_output=True,
+    result = retry.run(['node', '-e', script, str(HERE)], capture_output=True,
                             text=True, timeout=20, check=True)
     return json.loads(result.stdout)
 

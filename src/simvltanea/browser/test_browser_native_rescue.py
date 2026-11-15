@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 import json
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 
 from simvltanea.browser import test_browser_failed_outgoing as fixture
 
@@ -369,7 +369,7 @@ class NativeRescueTests(unittest.TestCase):
 
 class NativeRescueReceiptTests(unittest.TestCase):
     def test_bounded_receipts_survive_normal_event_eviction_without_allocating_in_normal_mode(self):
-        result = subprocess.run(['node', '-e', r'''
+        result = retry.run(['node', '-e', r'''
 const assert=require('node:assert/strict'),{Session}=require(process.argv[1]);
 const session=Object.create(Session.prototype),events=[];
 Object.assign(session,{proof:null,record(type,id,detail){events.push({type,id,...detail});if(events.length>256)events.shift()}});

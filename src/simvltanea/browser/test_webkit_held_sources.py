@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -57,7 +57,7 @@ function rowsFor(target = targets[0]) {
 
 
 def execute(body: str):
-    completed = subprocess.run(['node', '-e', FIXTURE + body, str(HELPER)],
+    completed = retry.run(['node', '-e', FIXTURE + body, str(HELPER)],
                                check=True, capture_output=True, text=True, timeout=15)
     return json.loads(completed.stdout)
 

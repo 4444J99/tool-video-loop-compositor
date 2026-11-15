@@ -1,7 +1,7 @@
 """A decoder repair is not a new logical resident in the native verdict."""
 import json
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 
@@ -29,7 +29,7 @@ console.log(JSON.stringify({repair: {births: repair.births, changedSlots: repair
   succession: repair.checks.succession}, succession: {births: succession.births,
   changedSlots: succession.changedSlots, succession: succession.checks.succession}}));
 '''
-        result = subprocess.run(['node', '-e', program,
+        result = retry.run(['node', '-e', program,
                                  str(Path(__file__).with_name('verify_webkit_sustained.js'))],
                                 capture_output=True, text=True, check=True)
         report = json.loads(result.stdout)

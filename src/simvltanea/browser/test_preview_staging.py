@@ -9,6 +9,7 @@ from pathlib import Path
 import stat
 import os
 import subprocess
+from simvltanea import subprocess_retry as retry
 from unittest.mock import patch
 
 from simvltanea.browser import browser_runtime as runtime
@@ -66,7 +67,7 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
         sources = []
         for k in range(count):
             clip = media / f'clip-{k + 1}.mp4'
-            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+            retry.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
                             f'color=c=0x{60 + 40 * k:02x}8040:s=64x48:r=24:d=1', '-c:v', 'libx264',
                             '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', str(clip)], check=True)
             sources.append(dict(id=f'source-{k + 1}', path=f'media/{clip.name}', kind='video', duration='1',

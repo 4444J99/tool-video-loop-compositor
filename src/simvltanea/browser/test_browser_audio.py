@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 import struct
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 import wave
 from pathlib import Path
@@ -33,7 +33,7 @@ def prepare_audio():
         original = ROOT / source['path']
         target = ROOT / 'media' / f'audio-tone-{index}.mp4'
         if not target.exists():
-            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(original),
+            retry.run(['ffmpeg', '-v', 'error', '-y', '-i', str(original),
                 '-f', 'lavfi', '-i', f'sine=frequency={220+index*220}:sample_rate=48000:duration=8',
                 '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac',
                 '-t', '8', str(target)], check=True)
@@ -94,7 +94,7 @@ class AudioPlanTests(unittest.TestCase):
         state = c.load_state(ROOT / 'state-audio-spatial.json')
         source = state['sources'][0]
         target = ROOT / 'media' / 'audio-unsupported-alac.mp4'
-        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(ROOT / source['path']),
+        retry.run(['ffmpeg', '-v', 'error', '-y', '-i', str(ROOT / source['path']),
                         '-c:v', 'copy', '-c:a', 'alac', str(target)], check=True)
         source['path'] = str(target.relative_to(ROOT)); source['sha256'] = c.sha256_file(target)
         c.save_state(state, ROOT / 'state-audio-unsupported.json')
@@ -281,7 +281,7 @@ class NativeAudioTests(unittest.TestCase):
     def test_fractional_native_eof_loops_before_next_compiled_frame(self):
         state = c.load_state(ROOT / 'state-audio-spatial.json')
         target = ROOT / 'media/audio-fractional.mp4'
-        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+        retry.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
             'color=c=blue:s=64x64:r=10:d=1.1', '-f', 'lavfi', '-i',
             'sine=frequency=440:sample_rate=48000:duration=1.1',
             '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-t', '1.1', str(target)],

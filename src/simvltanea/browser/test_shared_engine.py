@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 import tempfile
 from pathlib import Path
@@ -35,7 +36,7 @@ def node_available() -> bool:
 
 
 def run_node(source: str) -> dict:
-    result = subprocess.run(
+    result = retry.run(
         ['node', '--input-type=module', '-e', source],
         capture_output=True, text=True, timeout=60, check=False)
     if result.returncode != 0:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 HERE = Path(__file__).parent
@@ -35,7 +35,7 @@ function host() {
 
 
 def execute(body):
-    result = subprocess.run(['node', '-e', HOST + body, str(HERE)],
+    result = retry.run(['node', '-e', HOST + body, str(HERE)],
                             check=True, capture_output=True, text=True, timeout=20)
     return json.loads(result.stdout)
 

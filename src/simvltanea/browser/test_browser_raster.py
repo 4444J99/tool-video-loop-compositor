@@ -17,7 +17,7 @@ import hashlib
 import json
 import math
 import os
-import subprocess
+from simvltanea import subprocess_retry as retry
 import tempfile
 import threading
 import unittest
@@ -52,7 +52,7 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 
 
 def run_node(body: str, payload) -> object:
-    result = subprocess.run(['node', '-e', NODE_PRELUDE + body, str(RUNTIME_JS)], input=json.dumps(payload),
+    result = retry.run(['node', '-e', NODE_PRELUDE + body, str(RUNTIME_JS)], input=json.dumps(payload),
                             check=True, capture_output=True, text=True, timeout=60)
     return json.loads(result.stdout)
 

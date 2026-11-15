@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
-import subprocess
+from simvltanea import subprocess_retry as retry
 import unittest
 
 MODULE = Path(__file__).with_name('browser.lab_model.js')
@@ -15,7 +15,7 @@ class EffectsLabModelTests(unittest.TestCase):
     def evaluate(self, expression: str):
         self.assertTrue(MODULE.is_file(), 'The Effects Lab model has not been implemented')
         code = f'const m=require({json.dumps(str(MODULE))}); console.log(JSON.stringify({expression}));'
-        result = subprocess.run(['node', '-e', code], text=True, capture_output=True)
+        result = retry.run(['node', '-e', code], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 

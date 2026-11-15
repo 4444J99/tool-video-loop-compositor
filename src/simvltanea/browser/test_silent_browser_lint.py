@@ -64,6 +64,12 @@ def python_launches(source: str, name: str):
                             aliases.add(target.id); changed = True
     found = []
     for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Attribute) and node.value.attr in PY_LAUNCHERS:
+            owner = node.value.value  # a bound launch method kept for later: launch = pw.chromium.launch
+            label = owner.attr if isinstance(owner, ast.Attribute) else owner.id if isinstance(owner, ast.Name) else ''
+            if label in aliases or (driver and label not in SAFE_OWNERS):
+                found.append(node.lineno)
+            continue
         if not isinstance(node, ast.Call):
             continue
         func = node.func
@@ -170,6 +176,7 @@ class SilentLaunchLintTests(unittest.TestCase):
         self.assertEqual(node_launches("const pw = require('playwright'); await thing.launch();\n"), [1])
         self.assertEqual(python_launches("import playwright\nlaunch = getattr(pw.chromium, 'launch')\n", 'x.py'), [2])
         self.assertEqual(python_launches("import playwright\nbt = pw.chromium\nrunner = bt\nrunner.launch()\n", 'x.py'), [4])
+        self.assertEqual(python_launches("import playwright\nlaunch = pw.chromium.launch\nlaunch()\n", 'x.py'), [2])
         self.assertEqual(node_launches('/* webkit.launch() */ const x = 1;\n'), [])
         self.assertEqual(node_launches('const note = " // "; webkit.launch();\n'), [1])
         self.assertEqual(node_launches('const url = "http://x"; // chromium.launch()\n'), [])

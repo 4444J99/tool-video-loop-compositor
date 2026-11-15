@@ -90,34 +90,93 @@ def python_launches(source: str, name: str):
     return sorted(found)
 
 
+REGEX_AFTER = set('(,=:[!&|?{};+-*%<>~^')
+REGEX_AFTER_WORDS = {'return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'new', 'delete', 'void', 'throw', 'yield', 'await'}
+
+
+def _regex_end(source: str, i: int) -> int:
+    """Index just past the regex literal that opens at ``i`` (a slash), or ``i + 1`` when it does not close on its line."""
+    n, j, in_class = len(source), i + 1, False
+    while j < n and source[j] != '\n':
+        c = source[j]
+        if c == '\\':
+            j += 2
+            continue
+        if c == '[':
+            in_class = True
+        elif c == ']':
+            in_class = False
+        elif c == '/' and not in_class:
+            j += 1
+            while j < n and (source[j].isalnum() or source[j] in '_$'):
+                j += 1
+            return j
+        j += 1
+    return i + 1
+
+
 def _blank_comments(source: str) -> str:
-    """Blank out comments but keep every newline, so a commented launch is ignored and line numbers stay true.
-    String literals are walked, so ``" // "`` inside a string never hides the code after it."""
-    out, i, n, quote = [], 0, len(source), None
+    """Blank out comments, keeping every newline, so a commented launch is ignored and line numbers stay true.
+
+    A small lexer, so the comment markers it blanks are real ones: string literals are walked (``" // "`` inside a
+    string never hides the code after it), regex literals are skipped whole (``/\\//`` and ``/"/`` are not comments or
+    strings), and template literals nest (``${ ok ? `a` : `b` }``) with their expressions lexed as code. Text inside strings,
+    regexes and templates is left in place on purpose: the scan reports a launch that is only named in text (reword it)
+    rather than risk hiding a real one. Where the lexer misreads a slash as division or as a regex, the misread span is
+    still scanned, so the error shows up as an extra report, not as a hidden launch."""
+    out, i, n = [], 0, len(source)
+    frames = [['code', 0]]  # [kind, open-brace depth]; a template literal pushes 'tmpl', a ${ pushes 'code'
+    prev, prev_word = '', ''
     while i < n:
-        c, pair = source[i], source[i:i + 2]
-        if quote is None:
-            if pair == '//':
-                j = source.find('\n', i)
-                j = n if j < 0 else j
-                out.append(' ' * (j - i)); i = j
-                continue
-            if pair == '/*':
-                j = source.find('*/', i + 2)
-                j = n if j < 0 else j + 2
-                out.append(re.sub(r'[^\n]', ' ', source[i:j])); i = j
-                continue
-            if c in '"\'`':
-                quote = c
-            out.append(c)
-        else:
-            out.append(c)
+        kind, c, pair = frames[-1][0], source[i], source[i:i + 2]
+        if kind == 'tmpl':
             if c == '\\' and i + 1 < n:
-                out.append(source[i + 1]); i += 2
+                out.append(source[i:i + 2]); i += 2
+            elif c == '`':
+                frames.pop(); out.append(c); i += 1; prev = '`'
+            elif pair == '${':
+                frames.append(['code', 0]); out.append(pair); i += 2; prev = '{'
+            else:
+                out.append(c); i += 1
+            continue
+        if pair == '//':
+            j = source.find('\n', i)
+            j = n if j < 0 else j
+            out.append(' ' * (j - i)); i = j
+            continue
+        if pair == '/*':
+            j = source.find('*/', i + 2)
+            j = n if j < 0 else j + 2
+            out.append(re.sub(r'[^\n]', ' ', source[i:j])); i = j
+            continue
+        if c in '"\'':
+            j = i + 1
+            while j < n and source[j] != c and source[j] != '\n':
+                j += 2 if source[j] == '\\' else 1
+            j = min(j + 1, n)
+            out.append(source[i:j]); i = j; prev = c
+            continue
+        if c == '`':
+            frames.append(['tmpl', 0]); out.append(c); i += 1
+            continue
+        if c == '/' and (prev == '' or prev in REGEX_AFTER or prev_word in REGEX_AFTER_WORDS):
+            j = _regex_end(source, i)
+            out.append(source[i:j]); i = j; prev = ')'; prev_word = ''
+            continue
+        if c == '{':
+            frames[-1][1] += 1
+        elif c == '}':
+            if frames[-1][1] == 0 and len(frames) > 1:
+                frames.pop(); out.append(c); i += 1
                 continue
-            if c == quote or (c == '\n' and quote in '"\''):
-                quote = None
-        i += 1
+            frames[-1][1] -= 1
+        out.append(c); i += 1
+        if not c.isspace():
+            if c.isalnum() or c in '_$':
+                prev_word = (prev_word + c) if (prev.isalnum() or prev in '_$') else c
+            else:
+                prev_word = ''
+            prev = c
     return ''.join(out)
 
 
@@ -179,11 +238,20 @@ class SilentLaunchLintTests(unittest.TestCase):
         self.assertEqual(python_launches("import playwright\nlaunch = pw.chromium.launch\nlaunch()\n", 'x.py'), [2])
         self.assertEqual(node_launches('/* webkit.launch() */ const x = 1;\n'), [])
         self.assertEqual(node_launches('const note = " // "; webkit.launch();\n'), [1])
-        # The scan is fail-closed on purpose: text that only names a launch is reported (reword it), and a lexer that a
-        # regex literal desynchronises can only report more, never hide a launch. Blanking string text would invert that.
+        # Text that only names a launch is reported (reword it): string text is never blanked, so a lexer slip cannot hide a launch.
         self.assertEqual(node_launches('const note = "webkit.launch()";\n'), [1])
+        # Regex literals are lexed whole: a quote, a slash pair or a block-comment opener inside one is not code structure.
         self.assertEqual(node_launches('s.replace(/"/g, ""); await webkit.launch();\n'), [1])
+        self.assertEqual(node_launches('if (/"/.test(a)) f("x // y"); await webkit.launch();\n'), [1])
+        self.assertEqual(node_launches('s.replace(/"/g, ""); u = "a // b"; webkit.launch();\n'), [1])
+        self.assertEqual(node_launches('const parts = p.split(/\\//); await chromium.launch();\n'), [1])
+        self.assertEqual(node_launches('const g = /a\\/*/; await webkit.launch(); /* real comment */\n'), [1])
         self.assertEqual(node_launches("s.replace(/`/g, '');\nawait webkit.launch();\nconst t = `x`;\n"), [2])
+        self.assertEqual(node_launches('return /x/.test(y); // webkit.launch()\n'), [])
+        self.assertEqual(node_launches('const r = a / b; // webkit.launch()\n'), [])
+        # Template literals nest and their expressions are code.
+        self.assertEqual(node_launches('const s = `${ok ? `a` : `b`}`;\nfetch("http://x"); webkit.launch();\n'), [2])
+        self.assertEqual(node_launches('x = `a ${ {b: 1}.b } c`; // webkit.launch()\nwebkit.launch();\n'), [2])
         self.assertEqual(node_launches('const s = "a\\" // b"; await webkit.launch();\n'), [1])
         self.assertEqual(node_launches('const url = "http://x"; // chromium.launch()\n'), [])
         self.assertEqual(node_launches('await engine.launch(id);\n'), [])

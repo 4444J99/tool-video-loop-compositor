@@ -210,6 +210,43 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
                          'a newer intent owns the field; the stale re-attempt must not replace the retained variant')
         self.assertEqual(self.deferrals(page), 1)
 
+    def test_a_late_deferral_belongs_to_its_own_request_not_the_next_one(self):
+        """Codex P2 (a3833f7): deferrals were counted cumulatively, so a request
+        that recorded its deferral after the next launch had taken its snapshot
+        lent that slot to the next launch. Hold request A's deferral until a
+        second launch B has been submitted, then require the runtime to attribute
+        the slot to A's revision and report none for B."""
+        page = self.ready(site='settlement-variant')
+        self.defer(page, 'loop-1')
+        page.evaluate('''() => {
+          const r=compositionRuntime, replace=r.replace.bind(r);
+          window.heldDeferral={held:false,release:null,done:false};
+          r.replace=async (...args)=>{
+            if(heldDeferral.done) return replace(...args);
+            heldDeferral.done=true;
+            try { return await replace(...args); }
+            catch(error) {
+              heldDeferral.held=true;
+              await new Promise(resolve=>{ heldDeferral.release=resolve; });
+              throw error;
+            }
+          };
+        }''')
+        self.tap(page, '#loop-mode')
+        page.wait_for_function('() => heldDeferral.held', timeout=30000)
+        revision_a = page.evaluate('compositionRuntime.revision')
+        page.evaluate('restoreSettlementFault()')
+        self.tap_panel(page, 'loop-2')
+        page.wait_for_function('(a) => compositionRuntime.revision>a', arg=revision_a, timeout=15000)
+        page.evaluate('heldDeferral.release()')
+        self.settled(page)
+        last = page.evaluate('compositionRuntime.lastDeferral')
+        self.assertEqual(last['revision'], page.evaluate('compositionRuntime.revision'))
+        self.assertEqual(last['slots'], [], 'request B deferred nothing; A\'s late deferral is not B\'s')
+        self.assertEqual(self.deferrals(page), 1)
+        page.wait_for_timeout(3000)
+        self.assertEqual(page.evaluate("compositionRuntime.events.filter(e=>e.type==='handoff-reattempt').length"), 0)
+
 
     def test_edit_that_restores_the_same_intent_still_supersedes_the_re_attempt(self):
         """Cycling the family away and back is two edits that leave the intent

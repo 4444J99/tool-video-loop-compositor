@@ -179,6 +179,12 @@ class SilentLaunchLintTests(unittest.TestCase):
         self.assertEqual(python_launches("import playwright\nlaunch = pw.chromium.launch\nlaunch()\n", 'x.py'), [2])
         self.assertEqual(node_launches('/* webkit.launch() */ const x = 1;\n'), [])
         self.assertEqual(node_launches('const note = " // "; webkit.launch();\n'), [1])
+        # The scan is fail-closed on purpose: text that only names a launch is reported (reword it), and a lexer that a
+        # regex literal desynchronises can only report more, never hide a launch. Blanking string text would invert that.
+        self.assertEqual(node_launches('const note = "webkit.launch()";\n'), [1])
+        self.assertEqual(node_launches('s.replace(/"/g, ""); await webkit.launch();\n'), [1])
+        self.assertEqual(node_launches("s.replace(/`/g, '');\nawait webkit.launch();\nconst t = `x`;\n"), [2])
+        self.assertEqual(node_launches('const s = "a\\" // b"; await webkit.launch();\n'), [1])
         self.assertEqual(node_launches('const url = "http://x"; // chromium.launch()\n'), [])
         self.assertEqual(node_launches('await engine.launch(id);\n'), [])
         self.assertEqual(python_launches('pw.chromium.launch(headless=True)\n', 'x.py'), [1])

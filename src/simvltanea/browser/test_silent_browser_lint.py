@@ -125,8 +125,8 @@ def _blank_comments(source: str) -> str:
     rather than risk hiding a real one.
 
     Regex versus division is guessed from the previous token, so the lexer is a guard against an accidental bare launch,
-    not a parser. Known limit: a regex literal right after a closing parenthesis (``if (ok) /\\//.test(s)``) is read as
-    division, and a ``//`` or ``/*`` inside it is then read as a comment."""
+    not a parser. Known limit: a regex literal right after a closing parenthesis or brace (``if (ok) /\\//.test(s)``) is read as
+    division, and a ``//`` or ``/*`` inside it is then read as a comment, which can hide a launch later on that line."""
     out, i, n = [], 0, len(source)
     frames = [['code', 0]]  # [kind, open-brace depth]; a template literal pushes 'tmpl', a ${ pushes 'code'
     prev, prev_word = '', ''
@@ -162,8 +162,8 @@ def _blank_comments(source: str) -> str:
         if c == '`':
             frames.append(['tmpl', 0]); out.append(c); i += 1
             continue
-        if c == '/' and not re.search(r'(\+\+|--)\s*$', source[max(0, i - 64):i]) and (
-                prev == '' or prev in REGEX_AFTER or prev_word in REGEX_AFTER_WORDS):
+        if c == '/' and (prev == '' or prev in REGEX_AFTER or prev_word in REGEX_AFTER_WORDS) and not re.search(
+                r'(\+\+|--)\s*$', source[max(0, i - 64):i]):
             j = _regex_end(source, i)
             out.append(source[i:j]); i = j; prev = ')'; prev_word = ''
             continue
@@ -258,6 +258,8 @@ class SilentLaunchLintTests(unittest.TestCase):
         # Template literals nest and their expressions are code.
         self.assertEqual(node_launches('const s = `${ok ? `a` : `b`}`;\nfetch("http://x"); webkit.launch();\n'), [2])
         self.assertEqual(node_launches('x = `a ${ {b: 1}.b } c`; // webkit.launch()\nwebkit.launch();\n'), [2])
+        # Known limit (see _blank_comments): a regex right after a closing parenthesis is read as division.
+        self.assertEqual(node_launches('if (ok) /\\//.test(s); await webkit.launch();\n'), [])
         # Division is not a regex: after a postfix operator, a string, a template and a closed expression.
         self.assertEqual(node_launches('x = `${ i++ / 2 } a ${ j / 3 }`; // webkit.launch()\nwebkit.launch();\n'), [2])
         self.assertEqual(node_launches('return "a" / 2; // webkit.launch()\nwebkit.launch();\n'), [2])

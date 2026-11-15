@@ -712,7 +712,21 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     return params.toString();
   }
 
+  // Re-attempt delay for a deferred loop-mode handoff: one outgoing loop, 1 to 8 s.
+  // `quantized.duration` is a rational string ("13/2"); only `seconds` is a number.
+  function repairDelayMs(items) {
+    const seconds = Math.max(0, ...items.map(item => Number(item?.quantized?.seconds) || 0));
+    return Math.min(8000, Math.max(1000, seconds * 1000));
+  }
+  // The same user intent: an edit changes the seed, family, style or loops; a
+  // playback-only publish rebuilds the selection object from the same values.
+  function sameIntent(a, b) {
+    return Boolean(a && b) && a.seed === b.seed && a.family === b.family && a.style === b.style &&
+      a.loops.length === b.loops.length && a.loops.every((value, index) => value === b.loops[index]);
+  }
+
   const api = {
+    repairDelayMs, sameIntent,
     FPS, DEFAULT_SECONDS, DEFAULT_PANELS, MAX_TOTAL_BYTES, MIN_FRAMES, MAX_SPANS_PER_TRACK, OWN_FAMILY,
     quantizeDuration, admitSize, countVerdict, spanVerdict, nearestCount, familyLabel, oneLine, sniffContainer,
     playbackQueries, blobType, mediaSuffix, compositionFrames, formatMiB, seededRandom, parseSeed, createSuccession,
@@ -1323,9 +1337,10 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       if (!ownsIntent()) return false;
       const reordered = admission.some((item, index) => item !== items[index]);
       r.setSound({enabled: wantSound(), volume: sound.volume});
-      const deferralsBefore = r.deferredHandoffs || 0;
+      const deferralsBefore = {...r.deferredHandoffs};
       const completed = await r.reconcile({plan, items: admission, playing: !hold && !paused, atLoopBoundary});
-      const deferred = (r.deferredHandoffs || 0) > deferralsBefore;
+      const deferredSlots = new Set(Object.entries(r.deferredHandoffs || {})
+        .filter(([id, count]) => count > (deferralsBefore[id] || 0)).map(([id]) => id));
       if (!ownsIntent()) return false;
       const revision = r.revision;
       const cohort = plan.tracks.map(track => {
@@ -1361,8 +1376,8 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       if (usingLibrary()) prefetchNext();
       // A deferral keeps the exact old variant, and nothing else would revisit
       // it. A loop-mode toggle re-attempts the handoff a bounded number of times.
-      if (repair?.attempts > 0 && !completed && changed && deferred)
-        scheduleLoopModeRepair(selection, repair.attempts, actualItems);
+      if (repair?.attempts > 0 && !completed && changed && deferredSlots.size)
+        scheduleLoopModeRepair(selection, repair.attempts, actualItems, deferredSlots);
       return completed;
     } catch (error) {
       if (token === launches && error.name !== 'AbortError') toast(oneLine(error.message || error));
@@ -1382,21 +1397,22 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   // today's mixed outcome.
   const LOOP_MODE_REPAIR_ATTEMPTS = 2;
   let repairTimer = null;
-  function scheduleLoopModeRepair(owner, attempts, resident) {
+  function scheduleLoopModeRepair(owner, attempts, resident, deferredSlots) {
     clearTimeout(repairTimer);
-    const loopSeconds = Math.max(0, ...resident.map(item => Number(item.quantized?.duration) || 0));
-    const delayMs = Math.min(8000, Math.max(1000, loopSeconds * 1000));
+    const delayMs = repairDelayMs(resident);
     const attempt = () => {
       repairTimer = null;
-      // Keyed to the selection object, not to the launch counter: a playback-only
-      // relaunch (resume, repair) keeps this selection and must not cancel the
-      // repair, while any edit builds a new selection and does.
-      if (selection !== owner) return;
+      // Keyed to the user intent, not to the selection object or launch counter:
+      // a playback-only relaunch (resume, repair) republishes the same intent and
+      // must not cancel the repair, while any edit changes it and does.
+      if (!sameIntent(selection, owner)) return;
       // Paused, held or hidden pages cannot present fresh frames: wait, without
       // spending an attempt, until the studio is running again.
       if (document.hidden || hold || paused) { repairTimer = setTimeout(attempt, delayMs); return; }
-      const stale = [...(selection.retained || [])].filter(([, item]) =>
-        item.clip && item.asset && item.asset.id !== assetFor(item).id);
+      // Only slots whose own handoff was deferred: a sibling that failed to
+      // decode or play is not transient and is left alone.
+      const stale = [...(selection.retained || [])].filter(([slot, item]) =>
+        deferredSlots.has(`loop-${slot + 1}`) && item.clip && item.asset && item.asset.id !== assetFor(item).id);
       if (!stale.length) return;
       const retained = new Map(selection.retained);
       for (const [slot] of stale) retained.delete(slot);
@@ -2146,6 +2162,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     ui.filterTune.setAttribute('aria-expanded', 'false'); ui.filterTune.focus(); wake();
   });
   ui.loopMode.addEventListener('click', () => {
+    clearTimeout(repairTimer);
     loopMode = loopMode === 'boomerang' ? 'forward' : 'boomerang';
     for (const job of library.inflight.values()) job.controller.abort();
     library.inflight.clear(); library.cache.clear(); library.broken.clear(); library.prefetch = []; library.next = null;

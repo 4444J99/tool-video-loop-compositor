@@ -9,8 +9,12 @@ resolves while its native element stays paused) and then add no further edit.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import shutil
 import unittest
 
+from simvltanea.browser import test_browser_studio as studio_tests
 from simvltanea.browser import test_browser_studio_settlement as settlement
 
 BOOMERANG = "compositionRuntime.nodes.get('loop-1').item.asset.id"
@@ -22,6 +26,24 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         settlement.StudioSettlementTests.setUpClass.__func__(cls)
+        # Two clips with a boomerang variant each, so one loop-mode toggle moves
+        # two panels and the panels can fail for different reasons.
+        two = studio_tests.LIBRARY_SITES / 'recovery-two'
+        shutil.copytree(studio_tests.LIBRARY_SITES / 'settlement-variant', two)
+        temporary = two / 'variant-two.mp4'
+        studio_tests.ffmpeg('-f', 'lavfi', '-i', 'testsrc2=size=192x144:rate=30,hue=h=95',
+                            '-f', 'lavfi', '-i', 'sine=frequency=521:sample_rate=48000',
+                            '-t', '2', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+                            '-c:a', 'aac', '-ac', '1', '-shortest', '-movflags', '+faststart', str(temporary))
+        contents = temporary.read_bytes()
+        variant_id = hashlib.sha256(contents).hexdigest()[:12]
+        temporary.rename(two / 'library' / 'clips' / f'{variant_id}.mp4')
+        manifest = json.loads((two / 'library' / 'manifest.json').read_text())
+        first = next(item for item in manifest['clips'] if item['id'] == cls.ids[0])
+        second = next(item for item in manifest['clips'] if item['id'] == cls.ids[1])
+        second['variants'] = {'boomerang': {**first['variants']['boomerang'], 'id': variant_id,
+                                            'file': f'clips/{variant_id}.mp4', 'bytes': len(contents)}}
+        (two / 'library' / 'manifest.json').write_text(json.dumps(manifest))
 
     @classmethod
     def tearDownClass(cls):
@@ -127,6 +149,50 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
         self.assertEqual(self.deferrals(page), 0)
         self.assertEqual(page.evaluate("compositionRuntime.events.filter(e=>e.type==='handoff-reattempt').length"), 0)
         self.assertEqual(self.loop_one_asset(page), boomerang)
+
+    def test_only_the_deferred_slot_is_retried_when_a_sibling_fails_to_decode(self):
+        page = self.ready(site='recovery-two')
+        first = page.evaluate("compositionRuntime.nodes.get('loop-1').item.clip.id")
+        second = page.evaluate("compositionRuntime.nodes.get('loop-2').item.asset.id")
+        page.evaluate('''() => {
+          const r=compositionRuntime, prime=r.prime.bind(r);
+          window.settlementFault={slot:'loop-1',applied:false,incoming:null};
+          window.decodeFailures=0;
+          r.prime=async (...args)=>{
+            const [deck,node]=args;
+            if(node.id==='loop-2') { decodeFailures++; throw new Error('Incoming clip could not be decoded'); }
+            await prime(...args);
+            if(node.id!=='loop-1' || settlementFault.applied) return;
+            settlementFault.applied=true; settlementFault.incoming=deck.media;
+            deck.media.pause(); deck.media.play=()=>Promise.resolve();
+          };
+          window.restoreSettlementFault=()=>{ if(settlementFault.incoming) delete settlementFault.incoming.play; };
+        }''')
+        self.tap(page, '#loop-mode')
+        self.wait_deferred(page)
+        page.evaluate('restoreSettlementFault()')
+        page.wait_for_function(f"() => {BOOMERANG}==={first!r}", timeout=30000)
+        self.settled(page)
+        page.wait_for_timeout(5000)
+        self.assertEqual(page.evaluate('decodeFailures'), 1, 'the failed sibling must not be retried with the deferred slot')
+        self.assertEqual(page.evaluate("compositionRuntime.nodes.get('loop-2').item.asset.id"), second)
+
+    def test_repair_delay_uses_numeric_seconds_and_intent_ignores_playback_republish(self):
+        page = self.ready(site='settlement-variant')
+        delays = page.evaluate('''() => {
+          const api=SimvltaneaStudio, item=(duration,seconds)=>({quantized:{duration,seconds}});
+          return [api.repairDelayMs([]), api.repairDelayMs([item('13/2',6.5)]),
+            api.repairDelayMs([item('2',2),item('7/2',3.5)]), api.repairDelayMs([item('60',60)])];
+        }''')
+        self.assertEqual(delays, [1000, 6500, 3500, 8000])
+        same = page.evaluate('''() => {
+          const api=SimvltaneaStudio, style={z1:'2'}, a={seed:7,family:'strips',style,loops:[0,1,2],retained:new Map()};
+          const republished={...a,retained:new Map([[0,{}]])};
+          return [api.sameIntent(a,republished), api.sameIntent(a,{...a,loops:[0,1,3]}),
+            api.sameIntent(a,{...a,seed:8}), api.sameIntent(a,{...a,family:'authored'}),
+            api.sameIntent(a,{...a,style:{z1:'2'}}), api.sameIntent(a,null)];
+        }''')
+        self.assertEqual(same, [True, False, False, False, False, False])
 
     def test_next_edit_supersedes_the_pending_re_attempt(self):
         page = self.ready(site='settlement-variant')

@@ -585,6 +585,32 @@ result.samples.slice(800, 840).forEach(row => {row.nodes[0].decoded = .5;});
         three = self.assert_refused(freeze(3), 'decodedProgress')
         self.assertEqual(three['stalls']['episodes'], 3)
 
+    def test_a_host_wide_hold_of_every_resident_at_once_is_one_episode(self):
+        # The runner paused every decoder together (run 43614889899: four decks held about 2 s at one
+        # wall time). That is one host event, not four decoder failures.
+        def freeze_all(starts):
+            return '\n'.join(
+                f'result.samples.slice({start}, {start + 21}).forEach(row => '
+                f'{{row.nodes.forEach(node => {{node.decoded = .5;}});}});' for start in starts)
+        one = classify(freeze_all((200,)))
+        self.assertTrue(one['pass'], one)
+        self.assertEqual(one['stalls']['episodes'], 1)
+        two = classify(freeze_all((200, 450)))
+        self.assertTrue(two['pass'], two)
+        self.assertEqual(two['stalls']['episodes'], 2)
+
+    def test_repeated_host_wide_holds_and_a_frozen_decoder_still_fail(self):
+        def freeze_all(starts):
+            return '\n'.join(
+                f'result.samples.slice({start}, {start + 21}).forEach(row => '
+                f'{{row.nodes.forEach(node => {{node.decoded = .5;}});}});' for start in starts)
+        three = self.assert_refused(freeze_all((200, 450, 700)), 'decodedProgress')
+        self.assertEqual(three['stalls']['episodes'], 3)
+        self.assertFalse(three['stalls']['tolerated'])
+        frozen = self.assert_refused(
+            'result.samples.slice(200).forEach(row => {row.nodes[0].decoded = .5;});', 'decodedProgress')
+        self.assertFalse(frozen['stalls']['tolerated'])
+
     def test_two_recovered_stalls_pass(self):
         two = (
             'result.samples.slice(300).forEach(row => {row.progressSummary.maxGapMs = 2100;});\n'

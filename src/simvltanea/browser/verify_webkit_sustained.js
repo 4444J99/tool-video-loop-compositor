@@ -16,6 +16,15 @@ const DURATION_MS = 180000, SAMPLE_MS = 137, MAX_HOLD_MS = 2000;
 // least MAX_HOLD_MS is an episode, up to MAX_STALL_EPISODES episodes each shorter than STALL_CAP_MS
 // are tolerated, and a decoder that stays frozen (longer than the cap) or stalls repeatedly fails.
 const STALL_CAP_MS = 4000, MAX_STALL_EPISODES = 2;
+// Stalls that open within CONCURRENT_STALL_MS of one another on different residents are one host event
+// (the whole runner paused every decoder at once), so they are one episode; a lone frozen decoder is
+// still caught by the cap and by repeated episodes at distinct times.
+const CONCURRENT_STALL_MS = 1000;
+const concurrentEpisodes = walls => {
+  let count = 0, start = -Infinity;
+  for (const wall of [...walls].sort((a, b) => a - b)) if (wall - start > CONCURRENT_STALL_MS) { count++; start = wall; }
+  return count;
+};
 const REGIMES = ['SPARSE_BREATH', 'STEADY_FLOW', 'BURST_CHORUS'];
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const sha256 = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -332,16 +341,17 @@ function progressCoverage(result) {
     row.nodes.some(node => node.progress != null) || (row.decks || []).some(deck => deck.progress != null));
   let issueCount = 0, maxSampleGapMs = 0, maxGapMs = 0, previousWall, previousSummary;
   let nativeErrors = 0, suspensions = 0;
-  let summaryEpisodes = 0, risingNow = false, nativePeakMs = 0, sourceEpisodes = 0;
+  let summaryEpisodes = 0, risingNow = false, nativePeakMs = 0, retiredEpisodes = 0;
+  const liveStallWalls = [];
   const sourceStalls = new Map();
   // One native source (url and epoch) opens an episode when its current gap reaches the hold ceiling or
   // its own maximum rises to it; the same source seen live and later retired is counted once.
-  const noteSource = (p) => {
+  const noteSource = (p, wall) => {
     const key = JSON.stringify([p.url, p.epoch]);
     if (!sourceStalls.has(key)) sourceStalls.set(key, {max: 0, active: false});
     const state = sourceStalls.get(key);
     const stalled = p.currentGapMs >= MAX_HOLD_MS || (p.maxGapMs >= MAX_HOLD_MS && p.maxGapMs > state.max);
-    if (stalled && !state.active) sourceEpisodes++;
+    if (stalled && !state.active) { if (wall === undefined) retiredEpisodes++; else liveStallWalls.push(wall); }
     state.active = stalled; state.max = Math.max(state.max, p.maxGapMs);
     if (stalled) nativePeakMs = Math.max(nativePeakMs, p.currentGapMs, p.maxGapMs);
   };
@@ -392,7 +402,7 @@ function progressCoverage(result) {
           summary.maxGapMs < p.lifetimeMaxGapMs) {
         issue(index, 'missing or inconsistent source progress'); continue;
       }
-      noteSource(p);
+      noteSource(p, row.wall);
       const old = history.get(key);
       if (old && (p.epoch < old.epoch || p.changes < old.changes || p.lifetimeMaxGapMs < old.lifetimeMaxGapMs ||
           (p.epoch === old.epoch && (p.url !== old.url || p.sourceChanges < old.sourceChanges || p.maxGapMs < old.maxGapMs))))
@@ -416,7 +426,7 @@ function progressCoverage(result) {
     }
   }
   return {native, issueCount, issues, invalidRows, maxSampleGapMs, maxGapMs, nativeErrors, suspensions,
-    stallEpisodes: Math.max(summaryEpisodes, sourceEpisodes), stallPeakMs: nativePeakMs};
+    stallEpisodes: Math.max(summaryEpisodes, retiredEpisodes + concurrentEpisodes(liveStallWalls)), stallPeakMs: nativePeakMs};
 }
 
 function analyse(result) {
@@ -492,7 +502,7 @@ function analyse(result) {
     for (const id of restTrackers.keys()) if (!seen.has(id)) restTrackers.delete(id);
   }
   // Stall accounting: every hold the host saw, and every native stall episode, bounded together.
-  const stallEpisodes = Math.max(holds.length, coverage.stallEpisodes);
+  const stallEpisodes = Math.max(concurrentEpisodes(holds.map(hold => hold.wall)), coverage.stallEpisodes);
   const stallPeakMs = Math.max(jointMs, decodedMs, coverage.stallPeakMs);
   const stallsTolerated = stallEpisodes <= MAX_STALL_EPISODES && stallPeakMs < STALL_CAP_MS;
   nativeErrors += coverage.nativeErrors; globalSuspensions += coverage.suspensions;

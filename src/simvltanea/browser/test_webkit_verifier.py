@@ -344,6 +344,7 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
             " src: teardownUrl, currentSrc: teardownUrl, ready: 0, nativeError: null}];",
             "result.requestFailures = [{...result.requestFailures[0], resourceType: 'fetch'}];",
             "result.samples.pop();",
+            "result.requestFailures = [{...result.requestFailures[0], wall: 181860 + 6000}];",
             "result.samples.at(-1).decks[0].src = '';",
             "result.events.push({type: 'resource-retired', role: 'deck', id: 'loop-1', url: teardownUrl, wall: 100000,"
             " readyState: 0, paused: true});",

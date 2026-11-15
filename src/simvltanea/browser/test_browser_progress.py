@@ -106,7 +106,7 @@ assert.equal(s.retiredCount,21);assert.equal(s.maxGapMs,2400);
         # Forced timing: load() is slow (it advances the clock 27 ms before returning) and the cancelled read is
         # reported to the runner at the instant load() begins. The retirement record must not be later than that.
         self.run_js('''
-let wall=5000;Object.defineProperty(globalThis,'performance',{value:{now:()=>wall}});
+let wall=5000;Object.defineProperty(globalThis,'performance',{value:{now:()=>wall},configurable:true});
 const p=new FrameProgress(true);p.assign('blob:a',0);p.setForeground(true,0,true);p.observe(0,0);
 let cancelAt=null;
 const media={dataset:{loopId:'one'},style:{},error:null,pause(){},removeAttribute(){},

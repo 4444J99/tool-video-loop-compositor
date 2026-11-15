@@ -307,10 +307,12 @@ function classifyResourceErrors(result) {
       // The read must also be young: first seen within TEARDOWN_YOUNG_MS of the final observation. A standby stuck at
       // ready 0 for longer than that is a hung load, a playback fault that close() merely exposes.
       const finalRow = result.samples?.at(-1);
-      const firstSeen = finalRow && observations.find(row => (row.decks || []).some(deck => deck.src === url))?.wall;
+      const final = finalRow?.decks?.find(deck => deck.populated && !deck.active && deck.src === url);
+      const firstSeen = final && observations.find(row => (row.decks || []).some(deck =>
+        deck.src === url && deck.id === final.id && deck.deck === final.deck))?.wall;
       if (blob && cancelled && error.phase === 'closing' && error.method === 'GET' && error.resourceType === 'other' &&
-          finalRow && wall >= finalRow.wall && Number.isFinite(firstSeen) && finalRow.wall - firstSeen <= TEARDOWN_YOUNG_MS &&
-          (finalRow.decks || []).some(deck => deck.populated && !deck.active && deck.ready <= 2 && deck.src === url) &&
+          finalRow && final && final.ready <= 2 && wall >= finalRow.wall && wall - finalRow.wall <= TEARDOWN_YOUNG_MS &&
+          Number.isFinite(firstSeen) && finalRow.wall - firstSeen <= TEARDOWN_YOUNG_MS &&
           !(result.events || []).some(event => event?.type === 'resource-retired' && event.url === url)) {
         classified.expectedTeardown.push({...reference, finalObservedAt: finalRow.wall, lagMs: wall - finalRow.wall});
         continue;

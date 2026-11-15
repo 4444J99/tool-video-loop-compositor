@@ -464,7 +464,7 @@ const verdict = rows => {
   return {gate: report.checks.siblingIncomingOverlap, overlap: report.overlap, incoming: report.incomingObservations};
 };
 const walls = n => Array.from({length: n}, (_, i) => 1690 + i * 25);
-console.log(JSON.stringify({polled: verdict([1690, 2224]), recorded: verdict(walls(22)),
+console.log(JSON.stringify({polled: verdict([1690, 2224]), recorded: verdict(walls(22)), momentary: verdict(walls(4)),
   merged: verdict([1690, ...walls(22).slice(1), 2224].filter((wall, i, all) => all.indexOf(wall) === i))}));
 ''')
         self.assertFalse(result['polled']['gate'], result['polled'])
@@ -474,6 +474,10 @@ console.log(JSON.stringify({polled: verdict([1690, 2224]), recorded: verdict(wal
         self.assertGreaterEqual(result['recorded']['overlap']['advances'], 2)
         self.assertTrue(result['recorded']['incoming']['pass'])
         self.assertTrue(result['merged']['gate'], result['merged'])
+        # Density alone must not satisfy the proof: four rows 25 ms apart span 75 ms, below two host intervals.
+        self.assertFalse(result['momentary']['gate'], result['momentary'])
+        self.assertEqual(result['momentary']['overlap']['spanMs'], 75)
+        self.assertGreaterEqual(result['recorded']['overlap']['spanMs'], 274)
 
     def test_missing_or_stale_incoming_overlap_cannot_prove_the_fifth_decoder(self):
         result = execute(COHORT + r'''

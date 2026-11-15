@@ -183,10 +183,12 @@ class SilentBrowserPageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from playwright.sync_api import sync_playwright
+        # browser_executable() may start a Playwright of its own to find the bundled Chromium, so it runs before this one.
+        cls.options = {'executable_path': browser_executable()} if cls.engine_name == 'chromium' else {}
         cls.pw = sync_playwright().start()
         engine = getattr(cls.pw, cls.engine_name)
         try:
-            options = {'executable_path': browser_executable()} if cls.engine_name == 'chromium' else {}
+            options = cls.options
             cls.browser = silent_launch(engine, headless=True, args=CHROMIUM_FLAGS if cls.engine_name == 'chromium' else [],
                                         **options)
         except Exception as error:
@@ -219,9 +221,8 @@ class SilentBrowserPageTests(unittest.TestCase):
 
     def test_the_first_page_of_a_persistent_context_is_silenced_before_the_caller_writes_into_it(self):
         engine = getattr(self.pw, self.engine_name)
-        options = ({'executable_path': browser_executable()} if self.engine_name == 'chromium' else {})
         with tempfile.TemporaryDirectory() as profile:
-            context = silent_launch_persistent_context(engine, profile, headless=True, args=['--no-sandbox'] if self.engine_name == 'chromium' else [], **options)
+            context = silent_launch_persistent_context(engine, profile, headless=True, args=['--no-sandbox'] if self.engine_name == 'chromium' else [], **self.options)
             try:
                 first = context.pages[0]
                 self.assertTrue(first.evaluate('typeof window.__SILENT_BROWSER__ === "object"'))
@@ -332,7 +333,7 @@ class SilentBrowserPageTests(unittest.TestCase):
             return native.call(this, target, ...rest);
           }; })();"""
         engine = getattr(self.pw, self.engine_name)
-        options = {'executable_path': browser_executable()} if self.engine_name == 'chromium' else {}
+        options = self.options
         raw = engine.launch(headless=True, args=silent_args(self.engine_name, ['--no-sandbox'] if self.engine_name == 'chromium' else []), **options)
         self.addCleanup(raw.close)
         context = raw.new_context()

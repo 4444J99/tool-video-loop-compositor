@@ -320,15 +320,25 @@ function classifyResourceErrors(result) {
       // final observation, for a source that observation shows populated on a non-active deck still loading (ready 2 or below) and never retired, is the
       // harness tearing the document down, not playback failing. A closing-phase failure with no such positive
       // ownership evidence (another URL, a retired URL, an unobserved URL, an earlier phase) stays unexpected.
-      // The read must also be young: first seen within TEARDOWN_YOUNG_MS of the final observation. A standby stuck at
+      // The read must also be young: assigned no earlier than TEARDOWN_YOUNG_MS before the final observation (bounded by the preceding observation). A standby stuck at
       // ready 0 for longer than that is a hung load, a playback fault that close() merely exposes.
       const finalRow = result.samples?.at(-1);
-      const final = finalRow?.decks?.find(deck => deck.populated && !deck.active && deck.src === url);
-      const firstSeen = final && observations.find(row => (row.decks || []).some(deck =>
-        deck.src === url && deck.id === final.id && deck.deck === final.deck))?.wall;
+      // Hidden-standby evidence is required, not merely !active: during a crossfade the visible incoming deck already
+      // carries weight and foreground progress while node.active has not flipped. A cancelled read on that deck is a
+      // playback fault, not a close() artefact.
+      const hiddenStandby = deck => deck.weight === 0 && deck.progress?.foreground !== true &&
+        deck.progress?.foregroundSince == null;
+      // (A populated deck without schema-1 progress already fails observation coverage, so absence here is not a bypass.)
+      const final = finalRow?.decks?.find(deck => deck.populated && !deck.active && deck.src === url && hiddenStandby(deck));
+      // Bound the load age from above with the observation PRECEDING the first row that shows the URL: the assignment
+      // happened after that row, whereas the first row showing it can be delayed by evaluate latency. No preceding
+      // observation means no bound, so fail closed.
+      const firstSeenAt = final ? observations.findIndex(row => (row.decks || []).some(deck =>
+        deck.src === url && deck.id === final.id && deck.deck === final.deck)) : -1;
+      const assignedAfter = firstSeenAt > 0 ? observations[firstSeenAt - 1]?.wall : undefined;
       if (blob && cancelled && error.phase === 'closing' && error.method === 'GET' && error.resourceType === 'other' &&
           finalRow && final && final.ready <= 2 && wall >= finalRow.wall && wall - finalRow.wall <= TEARDOWN_YOUNG_MS &&
-          Number.isFinite(firstSeen) && finalRow.wall - firstSeen <= TEARDOWN_YOUNG_MS &&
+          Number.isFinite(assignedAfter) && finalRow.wall - assignedAfter <= TEARDOWN_YOUNG_MS &&
           !(result.events || []).some(event => event?.type === 'resource-retired' && event.url === url)) {
         classified.expectedTeardown.push({...reference, finalObservedAt: finalRow.wall, lagMs: wall - finalRow.wall});
         continue;

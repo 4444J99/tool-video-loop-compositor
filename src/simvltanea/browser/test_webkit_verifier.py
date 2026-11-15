@@ -158,7 +158,7 @@ TEARDOWN_BLOB = r'''
 // Run 43702981423: a standby deck still loading at the final sample is cancelled when browser.close() runs.
 const teardownUrl = 'blob:http://127.0.0.1/standby-at-close';
 result.samples[result.samples.length - 1].decks = [{id: 'loop-1', deck: 1, active: false, populated: true,
-  src: teardownUrl, currentSrc: teardownUrl, ready: 0, nativeError: null}];
+  src: teardownUrl, currentSrc: teardownUrl, ready: 0, nativeError: null, weight: 0}];
 result.requestFailures = [Object.freeze({wall: 182800, phase: 'closing', url: teardownUrl, method: 'GET',
   resourceType: 'other', failure: {errorText: 'cancelled'}})];
 Object.freeze(result.requestFailures);
@@ -339,6 +339,16 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
             "result.samples.at(-1).decks[0].populated = false;",
             "result.samples.at(-1).decks[0].active = true;",
             "result.samples.at(-1).decks[0].ready = 4;",
+            # A visible, non-active incoming deck during crossfade (weight and foreground progress set before
+            # node.active flips) is not hidden standby.
+            "result.samples.at(-1).decks[0].weight = 0.4;",
+            "result.samples.at(-1).decks[0].progress = {foreground: true, foregroundSince: 182000};",
+            "delete result.samples.at(-1).decks[0].weight;",
+            # First row showing the URL is the final one: the preceding row is the only age bound. A stalled
+            # evaluate delaying the first sighting (preceding row older than TEARDOWN_YOUNG_MS) must not pass.
+            "result.samples.at(-2).wall = result.samples.at(-1).wall - 6000;",
+            "result.samples.at(-1).decks[0].src = teardownUrl; result.samples.splice(0, result.samples.length - 1);"
+            " result.prelude = {samples: []};",
             # A standby stuck loading for over TEARDOWN_YOUNG_MS is a hung load, not a close() artefact.
             "result.samples[result.samples.length - 60].decks = [{id: 'loop-1', deck: 1, active: false, populated: true,"
             " src: teardownUrl, currentSrc: teardownUrl, ready: 0, nativeError: null}];",

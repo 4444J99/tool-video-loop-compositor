@@ -305,11 +305,16 @@ function journal(gaps) {
 }
 const ok = {current: 0, max: 137}, latched = {current: 0, max: 2073}, stalled = {current: 2073, max: 2073};
 const run = gaps => api.observeSources(journal(gaps), [targets[0]])[0];
-const frozen = Array.from({length: 12}, (_, i) => ({current: 2000 + i * 137, max: 2000 + i * 137}));
+const frozen = Array.from({length: 16}, (_, i) => ({current: 2000 + i * 137, max: 2000 + i * 137}));
+// One recovered stall of 3.3 s sampled every 137 ms: ten consecutive stall samples, as in runs 43744728683 (all four
+// residents, sustained) and 43721281441 (prelude). The cap bounds a stall in time, not in samples.
+const risingGaps = Array.from({length: 10}, (_, i) => ({current: 2073 + i * 137, max: 2073 + i * 137}));
+const recoveredAt = {current: 0, max: 3306}, longLatched = {current: 0, max: 3306};
 console.log(JSON.stringify({
   baseline: run(Array(12).fill(ok)),
   single: run([ok, ok, ok, stalled, latched, latched, latched, latched, latched, latched, latched, latched]),
-  frozen: run([ok, ok, ...frozen.slice(0, 10)]),
+  frozen: run([ok, ok, ...frozen]),
+  recoveredLong: run([ok, ok, ok, ...risingGaps, recoveredAt, longLatched, longLatched, longLatched, longLatched]),
   repeated: run([ok, stalled, ok, stalled, ok, stalled, ok, ok, ok, ok, ok, ok]),
   tailSingle: run([ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, stalled]),
   omitted: (() => {
@@ -342,6 +347,8 @@ console.log(JSON.stringify({
         self.assertGreater(result['single']['observations'], result['frozen']['observations'])
         # A decoder that stays frozen, or stalls again and again, fails.
         self.assertFalse(result['frozen']['pass']); self.assertGreater(result['frozen']['invalid'], 0)
+        # A stall of 3.3 s that recovered is an episode like the session judge's, however many samples it spans.
+        self.assertEqual(result['recoveredLong']['invalid'], 0); self.assertTrue(result['recoveredLong']['pass'])
         self.assertFalse(result['repeated']['pass']); self.assertGreater(result['repeated']['invalid'], 0)
         self.assertTrue(result['tailSingle']['pass'])
         # A tolerated stall does not excuse the resident vanishing from the next observation.
@@ -456,12 +463,14 @@ const longPrelude = () => {
 const withMax = (value, values) => values.forEach((gap, index) => {
   value.prelude.samples[index].progressSummary.maxGapMs = gap;});
 const single = longPrelude(); withMax(single, [137, 137, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100]);
-const sustained = longPrelude(); withMax(sustained, [137, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3100]);
+// A maximum that keeps rising for 11 samples but stops below the 4 s cap is one recovered stall, as in run 43721281441.
+const recovered = longPrelude(); withMax(recovered, [137, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3100]);
+const sustained = longPrelude(); withMax(sustained, [137, 2100, 2400, 2700, 3000, 3300, 3600, 3900, 4200, 4500, 4800, 5100]);
 const long = longPrelude(); withMax(long, Array(12).fill(60000));
 const repeated = longPrelude(); withMax(repeated, [137, 2100, 137, 2200, 137, 2300, 137, 137, 137, 137, 137, 137]);
-console.log(JSON.stringify([single, sustained, repeated, long].map(v => api.coverage(v, targets).checks.preludeNativeProgress)));
+console.log(JSON.stringify([single, sustained, repeated, long, recovered].map(v => api.coverage(v, targets).checks.preludeNativeProgress)));
 ''')
-        self.assertEqual(result, [True, False, False, False])
+        self.assertEqual(result, [True, False, False, False, True])
 
     def test_all_five_assets_and_held_body_wraps_prove_replay_coverage(self):
         result = execute(REPLAY + r'''

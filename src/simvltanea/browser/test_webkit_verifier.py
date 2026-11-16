@@ -455,6 +455,35 @@ for (const row of parkRows) {
                 self.assertFalse(summary['pass'], summary)
                 self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
 
+    def test_standby_parked_before_its_first_frame_may_present_exactly_that_frame_while_parked(self):
+        # Run 43791870531 (loop-3, fresh phase): the standby was first observed parked READY at ready 4 with source
+        # change 0; its first frame callback (media time 0) landed 1 ms later, 600 ms before it was resumed. That one
+        # frame must not read as playback while parked.
+        first = r'''
+const parkedRows = parkRows.filter(row => row.decks[1].paused && row.nodes[0].phase === 'READY');
+Object.assign(parkedRows[0].decks[1].progress, {changes: 0, sourceChanges: 0, lastChangeWall: null, mediaTime: null, trace: []});
+parkedRows[0].decks[1].decoded = null;
+'''
+        summary = classify_resources(PARKED_BLOB + first)
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(len(summary['resourceErrors']['admittedPreparations']), 1)
+        for refusal in (
+            # A first frame at a media time other than 0 is playback, not the parked first frame.
+            "parkRows.forEach(row => {const p = row.decks[1].progress; if (p.trace.length) p.trace[0].mediaTime = .1; "
+            "if (p.sourceChanges === 1) p.mediaTime = .1;});",
+            # More than the one frame: the park state changed again.
+            "parkedRows.slice(3).forEach(row => {const p = row.decks[1].progress; "
+            "p.changes = p.sourceChanges = 2; p.mediaTime = 1 / 30; p.lastChangeWall = parkedCase.parked + 100; "
+            "p.trace = [...p.trace, {wall: parkedCase.parked + 100, mediaTime: 1 / 30, changes: 2}];});",
+            # Zero to two in one step is not the first frame either, whatever its media time.
+            "parkedRows.slice(1).forEach(row => {const p = row.decks[1].progress; "
+            "p.changes = p.sourceChanges = 2; p.mediaTime = 0; p.lastChangeWall = parkedCase.parked + 100; p.trace = [];});",
+        ):
+            with self.subTest(refusal=refusal):
+                summary = classify_resources(PARKED_BLOB + first + refusal)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
     def test_proven_later_retirement_preserves_prior_preparation_admission(self):
         summary = classify_resources(PARKED_THEN_RETIRED_BLOB)
         self.assertTrue(summary['pass'], summary)
@@ -1085,6 +1114,28 @@ result.samples.slice(800, 830).forEach((row, index) => {
 result.samples.slice(800, 830).forEach(row => {
   const node = row.nodes[0]; node.resting = true; node.phase = 'RESTING';
 ''' + mutation + '\n});', 'restingProgress')
+
+    def test_one_recovered_resting_hold_is_a_tolerated_stall_like_an_active_one(self):
+        # Run 43744264084: one 2.3 s native gap on a resting loop failed only restingProgress, although the same stall
+        # on an active resident is tolerated and reported as one episode.
+        rest = '''
+result.samples.slice(790, 930).forEach(row => {row.nodes[0].resting = true; row.nodes[0].phase = 'RESTING';});
+for (const [from, to] of %s) result.samples.slice(from, to).forEach(row => {
+  row.nodes[0].current = row.nodes[0].decoded = .5;
+%s});
+'''
+        one = classify(rest % ('[[800, 817]]', ''))
+        self.assertTrue(one['pass'], one)
+        self.assertTrue(one['checks']['restingProgress'])
+        self.assertEqual(one['stalls'], {'episodes': 1, 'peakMs': one['longestRestingDecodedHoldMs'], 'tolerated': True})
+        self.assertGreaterEqual(one['longestRestingDecodedHoldMs'], 2000)
+        self.assertLess(one['longestRestingDecodedHoldMs'], 4000)
+        # A resting pause is never excused, repeated holds exceed the episode bound, a hold at the cap fails.
+        paused = self.assert_refused(rest % ('[[800, 817]]', 'row.nodes[0].paused = true;\n'), 'restingProgress')
+        self.assertGreater(paused['restingPaused'], 0)
+        three = self.assert_refused(rest % ('[[800, 817], [850, 867], [900, 917]]', ''), 'restingProgress')
+        self.assertEqual(three['stalls']['episodes'], 3)
+        self.assert_refused(rest % ('[[800, 830]]', ''), 'restingProgress')
 
     def test_healthy_moving_resting_resident_passes(self):
         summary = classify('''

@@ -387,32 +387,53 @@ function classifyResourceErrors(result) {
       // positive same-deck, same-native-source evidence; callback counts alone
       // or a future retirement are insufficient. Console failures never qualify.
       if (blob && cancelled) {
-        const frames = [], previous = new Map();
-        for (const row of observations) if (row.wall >= wall && row.wall <= wall + 1000) {
-          for (const deck of row.decks || []) if (deck.src === url && deck.currentSrc === url) {
-            if (result.progressSchema === 1 && (!validProgress(deck.progress, row.wall) || deck.progress.url !== url)) continue;
-            frames.push({wall: row.wall, id: deck.id, deck: deck.deck, epoch: deck.progress?.epoch,
-              decoded: deck.decoded, callbacks: deck.callbacks, nativeError: deck.nativeError});
+        const collect = (from, to, only) => {
+          const frames = [], previous = new Map();
+          for (const row of observations) if (row.wall >= from && row.wall <= to) {
+            for (const deck of row.decks || []) if (deck.src === url && deck.currentSrc === url) {
+              if (only && (deck.id !== only.id || deck.deck !== only.deck)) continue;
+              if (result.progressSchema === 1 && (!validProgress(deck.progress, row.wall) || deck.progress.url !== url)) continue;
+              frames.push({wall: row.wall, id: deck.id, deck: deck.deck, epoch: deck.progress?.epoch,
+                decoded: deck.decoded, callbacks: deck.callbacks, nativeError: deck.nativeError});
+            }
           }
-        }
-        const trace = traceFrames(evidence, url);
-        frames.push(...trace.frames.filter(frame => frame.wall >= wall && frame.wall <= wall + 1000));
-        frames.sort((a, b) => a.wall - b.wall);
-        if (!trace.invalid && !trace.nativeFailure && !trace.ambiguous && frames.length && frames.every(frame => !frame.nativeError)) {
-          let proof;
+          const trace = traceFrames(evidence, url);
+          frames.push(...trace.frames.filter(frame => frame.wall >= from && frame.wall <= to &&
+            (!only || (frame.id === only.id && frame.deck === only.deck))));
+          frames.sort((a, b) => a.wall - b.wall);
+          if (trace.invalid || trace.nativeFailure || trace.ambiguous || !frames.length ||
+              !frames.every(frame => !frame.nativeError)) return undefined;
           for (const frame of frames) {
             const sequence = frame.origin === 'callback-trace' ? frame.changes : frame.callbacks;
             if (typeof frame.id !== 'string' || !Number.isFinite(frame.deck) ||
                 !Number.isFinite(frame.decoded) || !Number.isFinite(sequence)) continue;
             const identity = JSON.stringify([frame.id, frame.deck, frame.epoch, frame.origin]), old = previous.get(identity);
             const oldSequence = old?.origin === 'callback-trace' ? old.changes : old?.callbacks;
-            if (old && frame.wall > old.wall && frame.decoded !== old.decoded && sequence > oldSequence) {
-              proof = [old, frame]; break;
-            }
+            if (old && frame.wall > old.wall && frame.decoded !== old.decoded && sequence > oldSequence) return [old, frame];
             previous.set(identity, frame);
           }
-          if (proof) { classified.recoveredReads.push({...reference, frames: proof}); continue; }
+          return undefined;
+        };
+        let proof = collect(wall, wall + 1000);
+        // A hidden standby whose read had already completed (ready 4, no native error) is not decoding, so a read
+        // cancelled after load cannot show frames inside the sampling window. It is cleared only by the SAME deck,
+        // source and native epoch continuously owning the url (never retired, never errored) until it is promoted
+        // and decodes advancing frames: a failed read cannot later play.
+        if (!proof && !(result.events || []).some(event => event?.type === 'resource-retired' && event.url === url)) {
+          const before = [...observations].reverse().find(row => row.wall <= wall &&
+            (row.decks || []).some(deck => deck.src === url && deck.populated));
+          const owner = before?.decks.find(deck => deck.src === url && deck.populated);
+          if (owner && owner.ready === 4 && !owner.active && !owner.nativeError && hiddenStandby(owner) &&
+              (result.progressSchema !== 1 || (validProgress(owner.progress, before.wall) && owner.progress.url === url))) {
+            const later = collect(wall, Infinity, owner);
+            if (later && later[1].epoch === owner.progress?.epoch && observations.every(row => row.wall < wall ||
+                row.wall > later[1].wall || (row.decks || []).some(deck => deck.id === owner.id && deck.deck === owner.deck &&
+                  deck.src === url && deck.populated && !deck.nativeError))) {
+              proof = later;
+            }
+          }
         }
+        if (proof) { classified.recoveredReads.push({...reference, frames: proof}); continue; }
       }
       const admitted = blob && cancelled && admittedPreparation(evidence, error, classified.expectedRetirements);
       if (admitted) { classified.admittedPreparations.push({...reference, ...admitted}); continue; }

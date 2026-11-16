@@ -83,11 +83,17 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
         measured = round(float(studio_tests.probe(temporary)['format']['duration']), 3)
         temporary.rename(long / 'library' / 'clips' / f'{long_id}.mp4')
         manifest = json.loads((long / 'library' / 'manifest.json').read_text())
-        # The mix selects by manifest position: test_retry_delay... puts position 6 in loop-2.
-        index = cls.long_position = 6
-        manifest['clips'][index] = {**manifest['clips'][index], 'id': long_id, 'file': f'clips/{long_id}.mp4',
-                                    'bytes': len(contents), 'duration_seconds': measured, 'width': 192, 'height': 144,
-                                    'orientation': 'landscape'}
+        # Replace a clip outside the first four by id (the ready mix selects the four
+        # lowest ids, and the studio sorts library clips by id), then locate the new
+        # clip in that same sorted order: where its id sorts depends on the encoder's bytes.
+        replaced = next(at for at, item in enumerate(manifest['clips']) if item['id'] == cls.ids[10])
+        manifest['clips'][replaced] = {**manifest['clips'][replaced], 'id': long_id, 'file': f'clips/{long_id}.mp4',
+                                       'bytes': len(contents), 'duration_seconds': measured, 'width': 192,
+                                       'height': 144, 'orientation': 'landscape'}
+        ordered = sorted(item['id'] for item in manifest['clips'])
+        # loop-1 is the variant clip, loop-2 the long one, then two other clips.
+        taken = [ordered.index(cls.ids[0]), ordered.index(long_id)]
+        cls.long_indices = taken + [at for at in range(len(ordered)) if at not in taken][:2]
         (long / 'library' / 'manifest.json').write_text(json.dumps(manifest))
 
     @classmethod
@@ -456,7 +462,7 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
 
     def test_retry_delay_is_the_deferred_panels_own_loop_not_the_longest_residents(self):
         """Issue 129. Loop-2 is seven seconds long; the deferred loop-1 about two."""
-        page = self.ready(site='recovery-long', indices=[0, self.long_position, 1, 2])
+        page = self.ready(site='recovery-long', indices=self.long_indices)
         self.assertEqual(page.evaluate("SimvltaneaStudio.snapshot().library.broken"), 0)
         self.assertEqual(page.evaluate("compositionRuntime.nodes.get('loop-2').item.clip.id"), self.long_id,
                          'the fixture must put the seven second clip in loop-2')

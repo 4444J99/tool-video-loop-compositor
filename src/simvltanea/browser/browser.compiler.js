@@ -543,6 +543,7 @@
     need(STATE_FIELDS.every(key => has(state, key)), 'state: missing required fields');
     refuse(state.schema_version === '1.1', 'Audio v1.1 (schema_version "1.1") is compiled by Python only');
     need(state.schema_version === 1, 'unsupported schema_version');
+    refuse(state.engine_version === '1.2.0', 'Engine 1.2.0 (cue events) is compiled by Python only');
     need(state.engine_version === ENGINE_VERSION, 'unsupported engine_version');
     need(state.rng === RNG, 'unsupported randomness algorithm');
     need(typeof state.seed === 'string' || Number.isSafeInteger(state.seed), 'seed must be a string or safe integer');

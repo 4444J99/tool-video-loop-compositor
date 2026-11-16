@@ -70,6 +70,15 @@ class CueEncodingTests(unittest.TestCase):
                              {x["id"]: x["source"] for x in c.resolve_at(reroll, frame)["loops"]}, frame)
 
 
+class CueBudgetTests(unittest.TestCase):
+    def test_the_event_budget_counts_one_event_per_change_in_cue_mode(self):
+        small = {"limits": {"max_events": 2000}}
+        with self.assertRaises(PlayError):
+            pe.schedule_play(POOL, 5, small, 300, FPS, 1)
+        state = pe.schedule_play(POOL, 5, {**small, "encoding": {"events": "cue"}}, 300, FPS, 1)["state"]
+        self.assertLessEqual(len(state["events"]), 2000)
+
+
 class CueValidationTests(unittest.TestCase):
     def setUp(self):
         self.state = play(3, 30, 4, "cue")["state"]

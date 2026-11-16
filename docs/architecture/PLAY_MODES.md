@@ -719,7 +719,7 @@ Versioning, so nothing existing changes:
 
 ## Owner decisions
 
-Decided 2026-11-16 (issue 71), from the measurements and recommendations in this document. Defaults are not
+Decided 2026-11-15 (issue 71), from the measurements and recommendations in this document. Defaults are not
 changed except where a decision says so.
 
 1. **A `cue` event: yes, opt-in, engine 1.2.0.** Decided and built (see [The cue event](#the-cue-event)); the
@@ -736,7 +736,7 @@ changed except where a decision says so.
    `drift` and `magnetic` are the alternatives. Untagged material needs stronger settings to
    cluster. The studio's own default is a separate matter (it starts from its authored layouts and plays real
    clips only where a visitor supplies them), and nothing here changes it.
-3. **`exclusion.untagged_policy`: default stays `allow`; every shared build already excludes.** A deliberate
+3. **`exclusion.untagged_policy`: default stays `allow`; shared builds pass `exclude`.** A deliberate
    tightening was made after the review: with
    `require_safety_clear` on (the default), a clip with no safety verdict at all (never
    tagged) is now excluded under either policy, because "make sure there is nothing bad in
@@ -746,9 +746,10 @@ changed except where a decision says so.
    is fine for a fully tagged personal corpus and too lax for anything shared.
    Decision: the library default stays `allow` because a play state is a private artifact (`play_state.py`
    refuses to write it inside a Git tree and tells the owner never to share it), because changing a default
-   moves every pinned digest and every replay of an earlier `.play.json`, and because the one publishing path,
-   `tools/media/build_public_demo.py`, already treats every unknown or missing fact as an exclusion. For any
-   other shared build use `--set exclusion.untagged_policy=exclude`; it also drops clips with an unknown rating or
+   moves every pinned digest and every replay of an earlier `.play.json`, and because the library's one publishing
+   path, `tools/media/build_public_demo.py`, does not use this setting at all: it applies its own owner-decided rules
+   (needs-review, safety verdict, the four privacy flags, each failing closed on a missing fact) and by design reads
+   neither the minors flag nor the sharing rating. For any play state that is shared, use `--set exclusion.untagged_policy=exclude`; it also drops clips with an unknown rating or
    an unknown flag. The tightening itself (a clip with no safety verdict is excluded under either value) stays:
    turning `require_safety_clear` off restores the old behaviour for untagged clips, and every other safety
    check with it.

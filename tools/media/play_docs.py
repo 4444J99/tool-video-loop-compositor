@@ -44,7 +44,7 @@ from simvltanea.authoring import play_config, play_presets, play_rng
 
 DOC = REPO_ROOT / "docs" / "architecture" / "PLAY_MODES.md"
 GRAVITY_DOC = REPO_ROOT / "docs" / "architecture" / "GRAVITY.md"
-SECTIONS = ("order", "path", "relation", "timing", "exclusion", "limits")
+SECTIONS = ("order", "path", "relation", "timing", "exclusion", "encoding", "limits")
 LIMIT = composition.MAX_SEGMENTS
 TYPICAL_CLIP_SECONDS = 2.4      # mean clip length of the synthetic pool the estimate was checked against
 TYPICAL_HOLD_SECONDS = 8.0      # mean of the default holds (4 to 12 s)

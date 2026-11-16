@@ -468,7 +468,7 @@ def schedule_play(pool: list[dict[str, Any]], n: int, config: Mapping[str, Any] 
     ids = sorted(records)
     schedule = build_schedule(model, ids, seq if shape in CURSOR_SHAPES or shape == "round" else ids, loop_ids,
                               adjacency, cfg, frames, fps, seed)
-    state, stats = encode_state(schedule, records, base, seed, limits["max_events"])
+    state, stats = encode_state(schedule, records, base, seed, limits["max_events"], cfg["encoding"]["events"])
     span_limit = MAX_SEGMENTS * len(loop_ids)
     spans = count_plan_spans(schedule, state, span_limit)
     if spans > span_limit:

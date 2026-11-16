@@ -169,6 +169,11 @@ contains never-tagged clips yields different states than before.
 
 ## Open owner decisions
 
+> Update 2026-11-16 (issue 71): the first three bullets are decided. `cue`: yes, opt-in, engine 1.2.0.
+> Default preset: `sticky` stays. `untagged_policy`: stays `allow` for private play states, shared builds
+> exclude. Reasons: [PLAY_MODES, Owner decisions](../architecture/PLAY_MODES.md#owner-decisions). The text
+> below is the original record.
+
 Deliberately left open and recorded with their measurements in
 [PLAY_MODES](../architecture/PLAY_MODES.md) and [GRAVITY](../architecture/GRAVITY.md). None has
 been decided or changed:

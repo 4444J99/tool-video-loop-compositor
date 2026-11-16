@@ -308,7 +308,7 @@ These apply to every play mode, so they live in [PLAY_MODES](PLAY_MODES.md): the
 (safety, privacy flags, minors, sharing sensitivity, untagged policy, exclusion by content
 digest), the state encoding with the existing `reroll` and `swap` events, the event and work
 budgets, the 1,024-segment limit of the offline renderer, and the pending owner decisions (the
-`cue` event, the default preset and `exclusion.untagged_policy`).
+`cue` event, the default preset and `exclusion.untagged_policy`); all three are decided there (2026-11-16).
 
 Still open from this lane:
 

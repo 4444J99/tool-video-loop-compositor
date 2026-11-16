@@ -176,6 +176,23 @@ for (const wall of [3466, 3603]) {
 '''
 
 
+# Capture ends with the rescue queued and started but not yet terminal (hosted run 43818004004: queued and started at
+# 210976, final observation 271 ms later). Rebuilds the receipt history without the commit.
+INFLIGHT_RESCUE = RESCUE + r'''
+rescueReceipts.splice(0, rescueReceipts.length, queued, started);
+const setCounters = value => {
+  for (const row of [...value.prelude.samples, ...value.samples]) {
+    row.progressSummary.nativeLoopRescue = {queued: Number(row.wall >= 2900), started: Number(row.wall >= 2901),
+      committed: 0, cancelled: 0, deferred: 0, dropped: 0, receipts: rescueReceipts.filter(event => event.wall <= row.wall)};
+    row.progressSummary.nativeLoopSeek = {attempted: Number(row.wall >= 2700), recovered: 0, rejected: 0,
+      interrupted: 0, dropped: 0, receipts: [guard].filter(event => event.wall <= row.wall)};
+  }
+};
+setCounters(replay);
+const lastWall = replay.samples.at(-1).wall;
+'''
+
+
 def execute(body: str):
     completed = retry.run(['node', '-e', FIXTURE + body, str(HELPER)],
                                capture_output=True, text=True, timeout=15)
@@ -861,6 +878,93 @@ const deferred = api.rescueAudit(replay, targets);
 console.log(JSON.stringify([cancelled, deferred].map(report => ({pass:report.pass,bridges:report.bridges.length}))));
 ''')
         self.assertEqual(result, [{'pass': True, 'bridges': 0}] * 2)
+
+    def test_rescue_in_flight_when_capture_ends_is_reported_not_committed(self):
+        result = execute(COHORT + INFLIGHT_RESCUE + r'''
+const before = JSON.stringify(replay), report = api.rescueAudit(replay, targets);
+console.log(JSON.stringify({pass: report.pass, issues: report.issues, complete: report.complete, bridges: report.bridges,
+  inFlight: report.inFlight, lastWall, unchanged: JSON.stringify(replay) === before, max: api.RESCUE_INFLIGHT_MAX_MS,
+  receipts: report.receipts.map(event => event.type)}));
+''')
+        self.assertEqual(result['issues'], [])
+        self.assertTrue(result['pass'])
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['bridges'], [])
+        self.assertEqual(result['receipts'], ['native-loop-rescue-queued', 'native-loop-rescue-started'])
+        self.assertEqual(len(result['inFlight']), 1)
+        self.assertEqual(result['inFlight'][0]['queuedAt'], 2900)
+        self.assertEqual(result['inFlight'][0]['startedAt'], 2901)
+        self.assertEqual(result['inFlight'][0]['ageMs'], result['lastWall'] - 2900)
+        self.assertTrue(result['unchanged'])
+        self.assertEqual(result['max'], 13000)
+
+    def test_in_flight_window_is_bounded_by_the_products_stage_deadlines(self):
+        result = execute(COHORT + INFLIGHT_RESCUE + r'''
+const out = [];
+for (const wall of [2900 + api.RESCUE_INFLIGHT_MAX_MS, 2900 + api.RESCUE_INFLIGHT_MAX_MS + 1]) {
+  const value = structuredClone(replay), copy = structuredClone(value.samples.at(-1));
+  copy.wall = wall; copy.progressSummary.nativeLoopRescue.receipts = rescueReceipts.filter(event => event.wall <= wall);
+  value.samples.push(copy);
+  const report = api.rescueAudit(value, targets);
+  out.push({pass: report.pass, issues: report.issues, inFlight: report.inFlight.length});
+}
+console.log(JSON.stringify(out));
+''')
+        self.assertEqual([entry['pass'] for entry in result], [True, False])
+        self.assertEqual(result[0]['inFlight'], 1)
+        self.assertEqual(result[1]['issues'], ['rescue lifecycle incomplete or duplicated'])
+
+    def test_in_flight_rescue_still_needs_each_lifecycle_and_ownership_rule(self):
+        result = execute(COHORT + INFLIGHT_RESCUE + r'''
+const every = value => [...value.prelude.samples, ...value.samples];
+const mutations = {
+  duplicateQueue: value => { const extra = {...queued, wall: 2950, time: 2.95};
+    for (const row of every(value)) if (row.wall >= 2950) {
+      row.progressSummary.nativeLoopRescue.queued = 2; row.progressSummary.nativeLoopRescue.receipts.push(extra); } },
+  duplicateStart: value => { const extra = {...started, wall: 2950, time: 2.95};
+    for (const row of every(value)) if (row.wall >= 2950) {
+      row.progressSummary.nativeLoopRescue.started = 2; row.progressSummary.nativeLoopRescue.receipts.push(extra); } },
+  twoTerminals: value => { const a = {...base, type: 'native-loop-rescue-cancelled', wall: 2960, time: 2.96, reason: 'x'},
+      b = {...base, type: 'native-loop-rescue-deferred', wall: 2970, time: 2.97, reason: 'y'};
+    for (const row of every(value)) {
+      const summary = row.progressSummary.nativeLoopRescue;
+      if (row.wall >= 2960) { summary.cancelled = 1; summary.receipts.push(a); }
+      if (row.wall >= 2970) { summary.deferred = 1; summary.receipts.push(b); } } },
+  missingGuard: value => { for (const row of every(value)) row.progressSummary.nativeLoopSeek.receipts = []; },
+  guardAfterQueue: value => { for (const row of every(value)) row.progressSummary.nativeLoopSeek.receipts =
+    row.wall >= 2905 ? [{...guard, wall: 2905}] : []; },
+  seekRecoveredWithoutRescueTerminal: value => { const event = {...guard, type: 'native-loop-seek-recovered', wall: 3000,
+      time: 3, attemptedAt: guard.time, decodedChanges: 2, seeking: false};
+    for (const row of value.samples) if (row.wall >= 3000) { row.progressSummary.nativeLoopSeek.receipts.push(event);
+      row.progressSummary.nativeLoopSeek.recovered = 1; } },
+  startedBeforeQueue: value => { for (const row of every(value)) {
+    row.progressSummary.nativeLoopRescue.receipts = row.progressSummary.nativeLoopRescue.receipts
+      .map(event => event.type === started.type ? {...event, wall: 2899, time: 2.899} : event);
+    row.progressSummary.nativeLoopRescue.started = Number(row.wall >= 2899); } },
+  otherIdentity: value => { for (const row of every(value))
+    row.progressSummary.nativeLoopRescue.receipts = row.progressSummary.nativeLoopRescue.receipts
+      .map(event => event.type === started.type ? {...event, birth: event.birth + 1} : event); },
+  unknownTarget: value => { for (const row of every(value))
+    row.progressSummary.nativeLoopRescue.receipts = row.progressSummary.nativeLoopRescue.receipts
+      .map(event => ({...event, sha256: 'f'.repeat(64)})); },
+  missingOwner: value => { for (const row of every(value)) if (row.wall <= 2900)
+    row.nodes = row.nodes.filter(node => node.id !== base.id); },
+  counterMismatch: value => { for (const row of every(value)) row.progressSummary.nativeLoopRescue.started = 0; },
+  strategyMismatch: value => { for (const row of every(value))
+    row.progressSummary.nativeLoopRescue.receipts = row.progressSummary.nativeLoopRescue.receipts
+      .map(event => ({...event, strategy: 'seek-play'})); },
+};
+console.log(JSON.stringify(Object.fromEntries(Object.entries(mutations).map(([name, mutate]) => {
+  const value = structuredClone(replay); mutate(value);
+  const report = api.rescueAudit(value, targets);
+  return [name, {pass: report.pass, inFlight: report.inFlight.length, bridges: report.bridges.length}];
+}))));
+''')
+        self.assertGreaterEqual(len(result), 12)
+        for name, outcome in result.items():
+            with self.subTest(name):
+                self.assertFalse(outcome['pass'], outcome)
+                self.assertEqual(outcome['bridges'], 0)
 
     def test_both_arms_require_the_recorded_production_rescue_policy(self):
         result = execute(COHORT + RESCUE + r'''

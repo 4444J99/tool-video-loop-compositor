@@ -40,6 +40,12 @@ const COVERAGE_CHECKS = ['initialSet', 'targetSet', 'targetIsolation', 'siblingS
   'finalSourcesSustained', 'heldComposition', 'strategiesMatch'];
 const MIN_OVERLAP_SPAN_MS = 2 * 137;
 const RESCUE_POLICY = Object.freeze({enabled: true, graceSimSec: .2, maximumFadeSec: .2, fadeSec: .2});
+// A rescue still in flight when capture ends has no terminal receipt. Its lifetime is bounded by the product's own stage
+// deadlines (browser.live.js replacePrepared; options.primeTimeoutMs/progressTimeoutMs are never overridden by the
+// studio): priming 10,000 ms (primeTimeoutMs), freshness watch 800 ms (watchHandoff budget, min(800, progressTimeoutMs
+// 2,000)), fade at most maximumFadeSec, promoted frames min(primeTimeoutMs, progressTimeoutMs) = 2,000 ms. A rescue queued
+// longer than this before the final observation must have ended, so a missing terminal is a lost or duplicated lifecycle.
+const RESCUE_INFLIGHT_MAX_MS = 10000 + 800 + RESCUE_POLICY.maximumFadeSec * 1000 + 2000;
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
@@ -103,7 +109,7 @@ function cohortSet(row, selected) {
 // neither a logical item match nor a reported commit can authorize it alone.
 function rescueAudit(result, targets) {
   const report = {pass: false, contract: result?.cohortOptions?.recoveryChain ?? null,
-    complete: false, receipts: [], bridges: [], issues: []};
+    complete: false, receipts: [], bridges: [], inFlight: [], issues: []};
   const rows = [...(result?.prelude?.samples || []), ...(result?.samples || [])];
   if (report.contract === null) {
     const partial = [result?.cohortOptions, result?.prelude?.strategyStart, result?.strategyFinal]
@@ -171,8 +177,12 @@ function rescueAudit(result, targets) {
   for (const group of groups.values()) {
     const queued = group.filter(event => event.type === counts.queued), started = group.filter(event => event.type === counts.started);
     const terminal = group.filter(event => [counts.committed, counts.cancelled, counts.deferred].includes(event.type));
-    const first = queued[0], end = terminal[0];
-    if (queued.length !== 1 || started.length > 1 || terminal.length !== 1 || !first || !end ||
+    const first = queued[0], last = rows.at(-1);
+    // No terminal is acceptable only for a rescue queued shortly before the final observation (see RESCUE_INFLIGHT_MAX_MS).
+    const inFlight = Boolean(!terminal.length && first && timestamp(last?.wall) && last.wall >= first.wall &&
+      last.wall - first.wall <= RESCUE_INFLIGHT_MAX_MS);
+    const end = inFlight ? {wall: last.wall} : terminal[0];
+    if (queued.length !== 1 || started.length > 1 || (terminal.length !== 1 && !inFlight) || !first || !end ||
         end.wall < first.wall || group.some((event, index) => index > 0 && event.time < group[index - 1].time) ||
         (started.length && (started[0].wall < first.wall || started[0].wall > end.wall))) {
       fail('rescue lifecycle incomplete or duplicated'); continue;
@@ -191,6 +201,13 @@ function rescueAudit(result, targets) {
       attemptKey(event) === attemptKey(first) && event.wall <= end.wall);
     if (seekTerminals.some(event => event.wall < first.wall)) {
       fail('rescue guard ended before queue'); continue;
+    }
+    if (inFlight) {
+      // Any seek terminal of this attempt would have cancelled the rescue with its own receipt.
+      if (seekTerminals.length) { fail('rescue guard ended before verified promotion'); continue; }
+      report.inFlight.push({id: first.id, url: first.url, queuedAt: first.wall, startedAt: started[0]?.wall ?? null,
+        observedUntil: last.wall, ageMs: last.wall - first.wall});
+      continue;
     }
     if (end.type !== counts.committed) continue;
     const positive = value => Number.isSafeInteger(value) && value >= 2;
@@ -528,4 +545,5 @@ function coverage(result, targets = TARGETS) {
     rescueAudit: audit, physicalStability};
 }
 
-module.exports = {TARGETS, ORIGIN, RESCUE_POLICY, buildManifest, controlledVerdict, coverage, rescueAudit};
+module.exports = {TARGETS, ORIGIN, RESCUE_POLICY, buildManifest, controlledVerdict, coverage, rescueAudit,
+  RESCUE_INFLIGHT_MAX_MS};

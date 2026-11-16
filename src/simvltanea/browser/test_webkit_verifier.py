@@ -484,6 +484,39 @@ parkedRows[0].decks[1].decoded = null;
                 self.assertFalse(summary['pass'], summary)
                 self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
 
+    def test_incoming_deck_may_wrap_its_own_loop_before_promotion_only_with_wrap_evidence(self):
+        # Run 43801218533 (seek-cohort-candidate, prelude): the visible incoming deck of a short clip wrapped its loop
+        # before promotion; one observation read seeking, media time went 0.83 to 0 and a new frame callback landed.
+        wrap = r'''
+const wrapped = parkRows.at(-2);
+wrapped.decks[1].seeking = true;
+Object.assign(wrapped.decks[1].progress, {changes: 4, sourceChanges: 4, mediaTime: 0, lastChangeWall: wrapped.wall - 10});
+wrapped.decks[1].decoded = 0;
+wrapped.decks[1].progress.trace.push({wall: wrapped.wall - 10, mediaTime: 0, changes: 4});
+for (const row of parkRows.slice(-1)) {
+  const p = row.decks[1].progress, w = wrapped.decks[1].progress;
+  Object.assign(p, {changes: 4, sourceChanges: 4, mediaTime: 0, lastChangeWall: w.lastChangeWall, trace: structuredClone(w.trace)});
+  row.decks[1].decoded = 0; row.nodes[0].progress = p;
+}
+'''
+        summary = classify_resources(PARKED_BLOB + wrap)
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(len(summary['resourceErrors']['admittedPreparations']), 1)
+        for refusal in (
+            # Seeking with no backward media time is not a wrap (rows kept self-consistent so only that rule decides).
+            "for (const row of parkRows.slice(-2)) {const p = row.decks[1].progress; p.mediaTime = .1; "
+            "p.trace.at(-1).mediaTime = .1; row.decks[1].decoded = .1;}",
+            # A seek that persists into the next row (media time not moving back again) is not a second wrap.
+            "parkRows.at(-1).decks[1].seeking = true; parkRows.at(-1).decks[1].progress.changes = "
+            "parkRows.at(-1).decks[1].progress.sourceChanges = 5; parkRows.at(-1).decks[1].progress.mediaTime = 0;",
+            # A seeking first row has no earlier observation to wrap from.
+            "parkRows.at(-3).decks[1].seeking = true;",
+        ):
+            with self.subTest(refusal=refusal):
+                summary = classify_resources(PARKED_BLOB + wrap + refusal)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
     def test_proven_later_retirement_preserves_prior_preparation_admission(self):
         summary = classify_resources(PARKED_THEN_RETIRED_BLOB)
         self.assertTrue(summary['pass'], summary)

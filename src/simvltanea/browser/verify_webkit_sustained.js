@@ -257,7 +257,7 @@ function admittedPreparation(result, error, expectedRetirements) {
   // (run 43732681195, seek-cohort-control). The row after the gap must still show the same identity, epoch and
   // foreground start, so a swapped source cannot be admitted. A second gap, or a gap in which the page did not
   // demonstrably run, returns null as before.
-  let bridged = false;
+  let bridged = false, earlier = null;
   for (let index = visibleIndex; index < rows.length; index++) {
     if (index > visibleIndex) {
       const gap = rows[index].wall - rows[index - 1].wall;
@@ -268,8 +268,17 @@ function admittedPreparation(result, error, expectedRetirements) {
       }
     }
     const state = context(rows[index]);
-    if (!state || state.deck.paused || state.deck.seeking || state.deck.currentSrc !== url || state.deck.ready < 3 ||
+    // A visible incoming deck of a short clip can wrap its own loop before promotion. That native loop seek reads
+    // seeking for one observation, but is positively evidenced by a new frame callback whose media time moved back
+    // (run 43801218533, seek-cohort-candidate: media time 0.83 to 0, one frame later). The deck's trace is validated frame by
+    // frame (traceFrames), so a media time that moved back is itself a new delivered frame. A seek with no
+    // backward media time is still refused, and so is a seeking first row (nothing earlier to wrap from). Every seeking row
+    // must carry its own wrap evidence, so a seek that merely persists across rows (media time not moving back again) fails.
+    const wrapSeek = Boolean(state?.deck.seeking && earlier &&
+      state.progress.mediaTime + .05 < earlier.progress.mediaTime);
+    if (!state || state.deck.paused || (state.deck.seeking && !wrapSeek) || state.deck.currentSrc !== url || state.deck.ready < 3 ||
         state.progress.foregroundSince !== foregroundAt || !validProgress(state.progress, state.row.wall, true)) return null;
+    earlier = state;
     if (state.deck.active) {
       if (state.node.deck !== identity.deck || state.node.busy || state.node.phase !== 'ACTIVE' ||
           state.node.progress?.url !== url || state.node.progress?.epoch !== epoch) return null;

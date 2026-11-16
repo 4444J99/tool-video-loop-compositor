@@ -26,18 +26,21 @@ const ORIGIN = Object.freeze({run: '42431559354', artifact: '13597902240',
 // life. Validity is therefore judged on the *recent* signal: a sample is a stall
 // sample when the current gap is at the ceiling or the maximum has just risen to it.
 // A bounded number of short stall runs is tolerated; a decoder that stays frozen
-// (a long run) or stalls repeatedly (many episodes) still fails.
+// (one that reaches the native cap) or stalls repeatedly (many episodes) still fails.
 const OBSERVATION_LIMIT_MS = 10000;
-const GAP_CEILING_MS = 2000, GAP_CAP_MS = 4000, MAX_STALL_RUN = 5, MAX_STALL_EPISODES = 2;
+const GAP_CEILING_MS = 2000, GAP_CAP_MS = 4000, MAX_STALL_EPISODES = 2;
 function stallStep(state, current, max) {
   // A completed stall is bounded too: a long one that recovered before it was sampled still fails.
   if (![current, max].every(gap => Number.isFinite(gap) && gap >= 0) || max < current || max >= GAP_CAP_MS) return 'fail';
   const stalled = current >= GAP_CEILING_MS || (max >= GAP_CEILING_MS && max !== state.max);
   state.max = max;
-  if (!stalled) { state.run = 0; return 'ok'; }
-  state.run = (state.run || 0) + 1;
-  if (state.run === 1) state.episodes = (state.episodes || 0) + 1;
-  return state.run > MAX_STALL_RUN || state.episodes > MAX_STALL_EPISODES ? 'fail' : 'stall';
+  if (!stalled) { state.inStall = false; return 'ok'; }
+  // An episode is a contiguous run of stalled samples. Its length is bounded in native time (GAP_CAP_MS, above),
+  // never in sample count: the sampler polls faster while a stall is in progress, so a host-wide pause of three
+  // seconds yields as many samples as the sampler happens to take, and that count says nothing about the decoder.
+  if (!state.inStall) state.episodes = (state.episodes || 0) + 1;
+  state.inStall = true;
+  return state.episodes > MAX_STALL_EPISODES ? 'fail' : 'stall';
 }
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -212,4 +215,4 @@ async function prepare(page, {sample, click, ready, pause, journal}, targets = T
   return result;
 }
 
-module.exports = {stallStep, MAX_STALL_RUN, MAX_STALL_EPISODES, TARGETS, ORIGIN, buildManifest, observeSources, transitionChecks, coverage, prepare};
+module.exports = {stallStep, MAX_STALL_EPISODES, TARGETS, ORIGIN, buildManifest, observeSources, transitionChecks, coverage, prepare};

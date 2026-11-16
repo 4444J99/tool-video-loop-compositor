@@ -305,11 +305,15 @@ function journal(gaps) {
 }
 const ok = {current: 0, max: 137}, latched = {current: 0, max: 2073}, stalled = {current: 2073, max: 2073};
 const run = gaps => api.observeSources(journal(gaps), [targets[0]])[0];
-const frozen = Array.from({length: 12}, (_, i) => ({current: 2000 + i * 137, max: 2000 + i * 137}));
+const frozen = Array.from({length: 12}, (_, i) => ({current: 2000 + i * 400, max: 2000 + i * 400}));
+// One 3.2 s host-wide pause sampled eight times (issue 115 follow-up, main run 43744728683): the sample count
+// inside a stall is a sampler artifact, so a stall below the native cap passes however finely it was polled.
+const polled = Array.from({length: 8}, (_, i) => ({current: 2000 + i * 150, max: 2000 + i * 150}));
 console.log(JSON.stringify({
   baseline: run(Array(12).fill(ok)),
   single: run([ok, ok, ok, stalled, latched, latched, latched, latched, latched, latched, latched, latched]),
   frozen: run([ok, ok, ...frozen.slice(0, 10)]),
+  polled: run([ok, ok, ...polled, {current: 0, max: 3050}, ok]),
   repeated: run([ok, stalled, ok, stalled, ok, stalled, ok, ok, ok, ok, ok, ok]),
   tailSingle: run([ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, stalled]),
   omitted: (() => {
@@ -342,6 +346,7 @@ console.log(JSON.stringify({
         self.assertGreater(result['single']['observations'], result['frozen']['observations'])
         # A decoder that stays frozen, or stalls again and again, fails.
         self.assertFalse(result['frozen']['pass']); self.assertGreater(result['frozen']['invalid'], 0)
+        self.assertEqual(result['polled']['invalid'], 0); self.assertTrue(result['polled']['pass'])
         self.assertFalse(result['repeated']['pass']); self.assertGreater(result['repeated']['invalid'], 0)
         self.assertTrue(result['tailSingle']['pass'])
         # A tolerated stall does not excuse the resident vanishing from the next observation.
@@ -456,12 +461,14 @@ const longPrelude = () => {
 const withMax = (value, values) => values.forEach((gap, index) => {
   value.prelude.samples[index].progressSummary.maxGapMs = gap;});
 const single = longPrelude(); withMax(single, [137, 137, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100]);
-const sustained = longPrelude(); withMax(sustained, [137, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3100]);
+const sustained = longPrelude(); withMax(sustained, [137, 2100, 2300, 2500, 2700, 2900, 3100, 3300, 3500, 3700, 3900, 4100]);
+const slowPoll = longPrelude(); withMax(slowPoll, [137, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3100]);
 const long = longPrelude(); withMax(long, Array(12).fill(60000));
 const repeated = longPrelude(); withMax(repeated, [137, 2100, 137, 2200, 137, 2300, 137, 137, 137, 137, 137, 137]);
-console.log(JSON.stringify([single, sustained, repeated, long].map(v => api.coverage(v, targets).checks.preludeNativeProgress)));
+console.log(JSON.stringify([single, sustained, repeated, long, slowPoll].map(v => api.coverage(v, targets).checks.preludeNativeProgress)));
 ''')
-        self.assertEqual(result, [True, False, False, False])
+        # A frozen decoder reaches the native cap; a bounded stall polled many times (slowPoll) is one tolerated episode.
+        self.assertEqual(result, [True, False, False, False, True])
 
     def test_all_five_assets_and_held_body_wraps_prove_replay_coverage(self):
         result = execute(REPLAY + r'''

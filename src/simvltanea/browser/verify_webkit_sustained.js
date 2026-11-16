@@ -205,7 +205,11 @@ function admittedPreparation(result, error, expectedRetirements) {
     return deck && deck.deck === original.deck && deck.src === original.src &&
       deck.progress.epoch === original.progress.epoch ? deck : null;
   };
+  // A paused standby parked before its first frame callback may still present exactly that frame (source change 0 to 1,
+  // media time 0) while it stays parked: run 43791870531 had it 1 ms after the first parked observation. Nothing else
+  // may change while parked; the frame is then the park baseline.
   let lastPark = initial, old = sameOutgoing(initial), moved = false, resumed, resumedIndex;
+  let base = initial, firstFramePresented = false;
   if (!old) return null;
   for (let index = afterIndex + 1; index < rows.length; index++) {
     if (rows[index].wall <= rows[index - 1].wall || rows[index].wall - rows[index - 1].wall > 1000) return null;
@@ -213,8 +217,13 @@ function admittedPreparation(result, error, expectedRetirements) {
     if (!state || !resident) return null;
     if (resident.progress.sourceChanges > old.progress.sourceChanges && resident.decoded !== old.decoded) moved = true;
     if (!state.deck.paused) { resumed = state; resumedIndex = index; break; }
-    if (!parked(state) || state.progress.sourceChanges !== initial.progress.sourceChanges ||
-        state.progress.mediaTime !== initial.progress.mediaTime) return null;
+    if (!parked(state)) return null;
+    const unchanged = state.progress.sourceChanges === base.progress.sourceChanges &&
+      state.progress.mediaTime === base.progress.mediaTime;
+    const presentedFirstFrame = !firstFramePresented && base.progress.sourceChanges === 0 &&
+      state.progress.sourceChanges === 1 && state.progress.changes === 1 && state.progress.mediaTime === 0;
+    if (!unchanged && !presentedFirstFrame) return null;
+    if (presentedFirstFrame) { base = state; firstFramePresented = true; }
     lastPark = state; old = resident;
   }
   if (!resumed || !moved || resumed.deck.seeking || resumed.deck.ready < 3 || resumed.deck.currentSrc !== url ||
@@ -486,6 +495,7 @@ function analyse(result) {
   let jointMs = 0, decodedMs = 0, wraps = 0, populated = 0, playing = 0, standbys = 0;
   let unexpectedPaused = 0, invalidMedia = 0, nativeErrors = 0, globalSuspensions = 0;
   let restingSamples = 0, restingDecodedMs = 0, restingJointMs = 0, restingPaused = 0, maxResting = 0;
+  const restHolds = [];
   const runtimeFailures = new Set();
   for (const [index, row] of result.samples.entries()) {
     const native = coverage.native && !coverage.invalidRows.has(index);
@@ -517,8 +527,12 @@ function analyse(result) {
         const changed = native ? rest.changes !== node.progress.changes : rest.decoded !== node.decoded;
         if (rest.current !== node.current || changed) rest.jointAt = row.wall;
         if (changed) rest.decodedAt = row.wall;
-        restingJointMs = Math.max(restingJointMs, row.wall - rest.jointAt);
-        restingDecodedMs = Math.max(restingDecodedMs, row.wall - rest.decodedAt);
+        const restJoint = row.wall - rest.jointAt, restDecoded = row.wall - rest.decodedAt;
+        restingJointMs = Math.max(restingJointMs, restJoint);
+        restingDecodedMs = Math.max(restingDecodedMs, restDecoded);
+        // A resting hold is a stall episode like an active one: counted once, re-armed on recovery.
+        if (restJoint < MAX_HOLD_MS && restDecoded < MAX_HOLD_MS) rest.reported = false;
+        else if (!rest.reported) { restHolds.push(row.wall); rest.reported = true; }
         Object.assign(rest, {current: node.current, decoded: node.decoded, changes: node.progress?.changes});
         restTrackers.set(node.id, rest);
       } else restTrackers.delete(node.id);
@@ -552,8 +566,8 @@ function analyse(result) {
     for (const id of restTrackers.keys()) if (!seen.has(id)) restTrackers.delete(id);
   }
   // Stall accounting: every hold the host saw, and every native stall episode, bounded together.
-  const stallEpisodes = Math.max(concurrentEpisodes(holds.map(hold => hold.wall)), coverage.stallEpisodes);
-  const stallPeakMs = Math.max(jointMs, decodedMs, coverage.stallPeakMs);
+  const stallEpisodes = Math.max(concurrentEpisodes([...holds.map(hold => hold.wall), ...restHolds]), coverage.stallEpisodes);
+  const stallPeakMs = Math.max(jointMs, decodedMs, restingJointMs, restingDecodedMs, coverage.stallPeakMs);
   const stallsTolerated = stallEpisodes <= MAX_STALL_EPISODES && stallPeakMs < STALL_CAP_MS;
   nativeErrors += coverage.nativeErrors; globalSuspensions += coverage.suspensions;
   const regimes = [...new Set(result.coarse.map(row => row.studio.ecosystem.regime))];
@@ -567,7 +581,10 @@ function analyse(result) {
     observationCoverage: coverage.issueCount === 0,
     jointProgress: jointMs < MAX_HOLD_MS || stallsTolerated,
     decodedProgress: Math.max(decodedMs, coverage.stallPeakMs) < MAX_HOLD_MS || stallsTolerated,
-    restingProgress: restingJointMs < MAX_HOLD_MS && restingDecodedMs < MAX_HOLD_MS && restingPaused === 0,
+    // A resting resident's hold is a stall episode counted and bounded with the active ones (run 43744264084: one
+    // 2.3 s native gap on a resting loop failed only this check while the two above tolerated the same stall); a
+    // pause is never excused.
+    restingProgress: restingPaused === 0 && ((restingJointMs < MAX_HOLD_MS && restingDecodedMs < MAX_HOLD_MS) || stallsTolerated),
     decodeBudget: populated <= 5 && playing <= 5 && standbys <= 1,
     validMedia: invalidMedia === 0 && nativeErrors === 0,
     noUnexpectedPause: unexpectedPaused === 0 && globalSuspensions === 0,

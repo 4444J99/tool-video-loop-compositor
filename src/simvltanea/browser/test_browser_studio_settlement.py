@@ -107,8 +107,9 @@ class StudioSettlementTests(unittest.TestCase):
     unlock = studio_tests.StudioLibraryTests.unlock
     tap = studio_tests.StudioLibraryTests.tap
 
-    def ready(self, *, count=4, init_script='', site='good'):
-        page = self.open(site=site, query='?seed=99&mix=s' + '.'.join(map(str, range(count))) + '&evolve=0&proof=1',
+    def ready(self, *, count=4, init_script='', site='good', indices=None):
+        indices = list(range(count)) if indices is None else indices
+        page = self.open(site=site, query='?seed=99&mix=s' + '.'.join(map(str, indices)) + '&evolve=0&proof=1',
                          has_touch=True, init_script=COMPILER_OBSERVER + init_script)
         self.playing(page, count)
         self.unlock(page)
@@ -273,7 +274,7 @@ class StudioSettlementTests(unittest.TestCase):
         expected_mix = 's' + '.'.join(str(self.ids.index(name)) for name in names)
         self.assertEqual(result['mix'], expected_mix)
 
-    def test_retained_variant_keeps_exact_bytes_when_another_panel_is_tapped(self):
+    def test_retained_variant_keeps_exact_bytes_until_another_panel_is_tapped(self):
         page = self.ready(site='settlement-variant')
         self.assertEqual(page.evaluate("compositionRuntime.nodes.get('loop-1').item.sha256"), self.variant_sha)
         self.defer(page, 'loop-1')
@@ -287,10 +288,18 @@ class StudioSettlementTests(unittest.TestCase):
         self.tap_panel(page, 'loop-2')
         page.wait_for_function("() => compositionRuntime.nodes.get('loop-2').item!==settlementBefore.residents[1].item")
         self.settled(page)
+        # Issue 126: the tap keeps the deferred panel in its slot, and its own
+        # launch now replaces the retained old variant with the requested one.
+        page.wait_for_function("() => compositionRuntime.nodes.get('loop-1').item.asset.id===compositionRuntime.nodes.get('loop-1').item.clip.id",
+                               timeout=30000)
+        self.settled(page)
         result = self.report(page, 'retained-variant-next-tap')
-        self.assertEqual(result['actual'][0]['sha'], self.variant_sha)
-        self.assertTrue(all(result['residents'][0][key] for key in ('sameNode', 'sameMedia', 'sameDeck',
-            'sameItem', 'sameBirth', 'sameAudio', 'sameURL', 'advancing')))
+        self.assertNotEqual(result['actual'][0]['sha'], self.variant_sha)
+        self.assertTrue(all(page.evaluate(
+            "[...compositionRuntime.nodes.values()].map(n=>n.item.asset.id===n.item.clip.id)")))
+        for sibling in result['residents'][2:]:
+            self.assertTrue(all(sibling[key] for key in ('sameNode', 'sameMedia', 'sameDeck', 'sameItem',
+                'sameBirth', 'sameAudio', 'sameURL', 'advancing')), sibling)
         self.assert_plan_matches_residents(result)
 
     def test_partial_personal_import_keeps_foreign_resident_during_next_tap(self):

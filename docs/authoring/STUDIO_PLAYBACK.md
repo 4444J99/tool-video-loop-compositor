@@ -65,14 +65,19 @@ decoded still image. These safeguards preserve the original frame-progress
 history and the separate two-second verification gate.
 
 A loop-mode toggle whose handoff is deferred keeps the exact old variant and then
-re-attempts: after one outgoing loop (1 to 8 seconds), at most twice, recording
-`handoff-reattempt`. Any other edit is a newer intent and cancels the pending
-attempt, a paused, held or hidden page waits without spending an attempt, and a
-deferral past the bound leaves the mixed field. An edit that keeps the deferred
-panel in its slot (re-rolling another panel, cycling the family or changing the
-count) does not repair it: the slot keeps its retained old variant, as
-`test_browser_studio_deferred_recovery` pins. Toggling the loop mode again,
-re-rolling that panel, or shuffling replaces it.
+re-attempts: after one outgoing loop of the deferred panel itself (1 to 8 seconds),
+at most twice, recording `handoff-reattempt`. The attempt is keyed to the deferred
+panel's retained entry, so a sibling panel replaced meanwhile (evolve) or a
+playback-only relaunch (resuming from hold) does not end it, and a relaunch that
+lands while the toggle's own launch is still in flight inherits its remaining
+attempts. Replacing the deferred panel ends it. A paused, held or hidden page waits
+without spending an attempt. Any user edit is a newer intent and cancels the
+pending attempt; an edit that keeps the deferred panel in its slot (re-rolling
+another panel, cycling the family or changing the count) replaces it in that
+edit's own launch (a deferral there is not retried; the next edit tries again), so
+a deferral that persists past the bound leaves the mixed field until then. Only readiness deferrals
+are replaced this way: a panel kept after a decode or playback failure stays as it
+is, as `test_browser_studio_deferred_recovery` pins.
 
 Selection, share links and export metadata are committed from the residents that
 actually remain after a change. A deferred panel does not undo successful changes

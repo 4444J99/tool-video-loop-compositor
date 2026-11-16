@@ -257,7 +257,7 @@ function admittedPreparation(result, error, expectedRetirements) {
   // (run 43732681195, seek-cohort-control). The row after the gap must still show the same identity, epoch and
   // foreground start, so a swapped source cannot be admitted. A second gap, or a gap in which the page did not
   // demonstrably run, returns null as before.
-  let bridged = false;
+  let bridged = false, earlier = null;
   for (let index = visibleIndex; index < rows.length; index++) {
     if (index > visibleIndex) {
       const gap = rows[index].wall - rows[index - 1].wall;
@@ -268,8 +268,17 @@ function admittedPreparation(result, error, expectedRetirements) {
       }
     }
     const state = context(rows[index]);
-    if (!state || state.deck.paused || state.deck.seeking || state.deck.currentSrc !== url || state.deck.ready < 3 ||
+    // A visible incoming deck of a short clip can wrap its own loop before promotion. That native loop seek reads
+    // seeking for one observation, but is positively evidenced by a new frame callback whose media time moved back
+    // (run 43801218533, seek-cohort-candidate: media time 0.83 to 0, one frame later). The deck's trace is validated frame by
+    // frame (traceFrames), so a media time that moved back is itself a new delivered frame. A seek with no
+    // backward media time is still refused, and so is a seeking first row (nothing earlier to wrap from). Every seeking row
+    // must carry its own wrap evidence, so a seek that merely persists across rows (media time not moving back again) fails.
+    const wrapSeek = Boolean(state?.deck.seeking && earlier &&
+      state.progress.mediaTime + .05 < earlier.progress.mediaTime);
+    if (!state || state.deck.paused || (state.deck.seeking && !wrapSeek) || state.deck.currentSrc !== url || state.deck.ready < 3 ||
         state.progress.foregroundSince !== foregroundAt || !validProgress(state.progress, state.row.wall, true)) return null;
+    earlier = state;
     if (state.deck.active) {
       if (state.node.deck !== identity.deck || state.node.busy || state.node.phase !== 'ACTIVE' ||
           state.node.progress?.url !== url || state.node.progress?.epoch !== epoch) return null;
@@ -283,6 +292,26 @@ function admittedPreparation(result, error, expectedRetirements) {
 }
 
 const TEARDOWN_YOUNG_MS = 5000;
+// The failure wall is runner receipt time converted to page time; the retirement wall is the page clock. Under host load
+// the two disagree by more than the real ordering (issue 115, hosted run 43803782592: retirement stamped 107 ms AFTER the
+// failure of a hidden standby, while sampler round trips reached 1,162 ms and event-loop lag 621 ms in the same artifact).
+const RETIREMENT_ORDER_SKEW_MS = 1000;
+// Positive identity evidence for a retirement stamped after its failure: every observation of the URL before the
+// retirement shows one and the same hidden standby (inactive, weight 0, never foreground, no foreground start), and at
+// least one shows it populated. A deck that was ever active or visible is a playback fault, never clock skew.
+function neverVisibleStandby(observations, event) {
+  let populated = false;
+  for (const row of observations) {
+    if (!(row.wall < event.wall)) continue;
+    for (const deck of row.decks || []) {
+      if (deck.src !== event.url && deck.currentSrc !== event.url) continue;
+      if (deck.id !== event.id || deck.active !== false || deck.weight !== 0 ||
+          deck.progress?.foreground !== false || deck.progress.foregroundSince !== null) return false;
+      if (deck.populated && deck.src === event.url) populated = true;
+    }
+  }
+  return populated;
+}
 const OBSERVER_GAP_BRIDGE_MS = 5000;
 function classifyResourceErrors(result) {
   // Prelude reads belong to the same document and native source lifetimes.
@@ -312,7 +341,9 @@ function classifyResourceErrors(result) {
       const retired = blob && expectedType && (result.events || []).find(event => {
         const lag = wall - event.wall;
         if (event.type !== 'resource-retired' || !['deck', 'metadata'].includes(event.role) || event.url !== url ||
-            event.readyState !== 0 || event.paused !== true || !Number.isFinite(event.wall) || lag < 0) return false;
+            event.readyState !== 0 || event.paused !== true || !Number.isFinite(event.wall)) return false;
+        // A retirement stamped after the failure is accepted only as bounded clock skew of a never-visible hidden standby.
+        if (lag < 0 && (event.role !== 'deck' || -lag > RETIREMENT_ORDER_SKEW_MS || !neverVisibleStandby(observations, event))) return false;
         // Cancellation delivery is asynchronous. Identity and confirmed disposal,
         // not runner receipt latency, determine whether this is the retired read.
         // Reject re-admission anywhere after disposal, including after the error.

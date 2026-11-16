@@ -1443,6 +1443,15 @@ class PlayStateCompilerTests(unittest.TestCase):
             rect=state['layouts']['portrait']['cells'][0]['rect'])])
         with_cue = dict(copy.deepcopy(state), events=[*state['events'], dict(op='cue', frame=last, loop='loop-1')])
         with_seam = dict(copy.deepcopy(state), seam={'enabled': True})
+        cue_state = play_state(3, 20, encoding={'events': 'cue'})['state']
+        self.assertEqual(cue_state['engine_version'], c.CUE_ENGINE_VERSION)
+        self.assertTrue(any(event['op'] == 'cue' for event in cue_state['events']))
+        cue_result, = node(['compilePlan', cue_state])
+        self.assertFalse(cue_result['ok'], cue_result)
+        self.assertEqual(cue_result['name'], 'CompilerError')
+        self.assertRegex(cue_result['message'], '^outside the browser compiler subset: Engine 1.2.0 \\(cue events\\)')
+        self.assertTrue(cue_result['unsupported'], cue_result)
+        compile_plan(cue_state)                    # Python compiles it: the refusal is a gap, not a verdict
         results = node(*(['compilePlan', s] for s in (with_hold, with_move, with_cue, with_seam)))
         for name, mutant, result, pattern, python_compiles in (
                 ('hold', with_hold, results[0], 'hold and move events are resolved by composition.py only', True),

@@ -129,8 +129,8 @@ takes much longer on that state.
 loops, with and without a slice and with swap events. Positive controls are also
 checked. A changed seed, two exchanged rerolls, or a dropped event changes the
 spans, or both compilers refuse the state. A state with one-source banks
-compiles as before. Hold, move, and `cue` events and enabled seams are still
-refused. The 10-minute state is held to a 20 s bound, and its spans are checked
+compiles as before. Hold and move events, enabled seams and engine 1.2.0 states
+(cue events) are still refused. The 10-minute state is held to a 20 s bound, and its spans are checked
 against the schedule's timeline and against `composition.resolve_at` at every
 event frame.
 
@@ -140,13 +140,16 @@ Every input outside the subset throws a `CompilerError`. It is always a refusal
 and never a wrong plan. The `error.unsupported` flag tells you which kind:
 
 - `unsupported === true`: Python compiles the state, but the browser compiler
-  does not cover it. That covers hold and move events; Audio v1.1; N outside 1
+  does not cover it. That covers hold and move events; Audio v1.1; engine 1.2.0
+  (states with `cue` events, `encoding.events = cue`); N outside 1
   to 12; enabled seams; duplicate media; and a declared source that no bank
   holds. A slice on one loop is not part of the state schema, so Python refuses
   it too.
-- An event operation that Python does not read, such as `cue`, fails with
-  `unsupported event: cue` and `unsupported === false`, because Python refuses
-  it too. A `cue` event is not part of this compiler (issue 71).
+- An event operation that Python does not read in the state's engine version,
+  such as `cue` in an engine 1.0.0 state, fails with `unsupported event: cue`
+  and `unsupported === false`, because Python refuses it too. A genuine engine
+  1.2.0 state is the other kind: Python compiles it and this compiler refuses it
+  with `unsupported === true` until the compiler learns engine 1.2.0.
 - `unsupported === false`: either Python refuses the state too, or Python reads
   a spelling or value that the compiler will not. The second group is `'+1/2'`,
   `' 1/2'`, `'1_0/3'`, non-ASCII digits, decimal strings such as `'1.5'`,

@@ -37,6 +37,7 @@ CLIP_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")      # same rule as composition.I
 PRIVACY_FLAGS = ("readable_text", "license_plate", "document_or_screen", "location_identifiable")
 SHARING_LEVELS = ("low", "moderate", "high")         # analysis.privacy.sharing_sensitivity (tag schema v2)
 UNTAGGED_POLICIES = ("allow", "exclude")
+ENCODINGS = ("reroll", "cue")
 ORDER_AXES = ("none", "captured_at", "luma", "luma_spread", "saturation", "hue", "motion", "duration",
               "motion_level", "shot", "time_of_day")
 ORDER_DIRECTIONS = ("ascending", "descending")
@@ -49,7 +50,7 @@ MIN_HOLD = 0.25                  # seconds: hard floor for any hold, beat or swa
 MAX_SECONDS = 1_000_000.0
 MAX_ID_LIST = 10_000      # most ids in one id_list parameter (anchors, exclude_ids)
 
-SECTIONS = ("order", "path", "relation", "timing", "exclusion", "limits")
+SECTIONS = ("order", "path", "relation", "timing", "exclusion", "encoding", "limits")
 
 
 def _p(section: str, name: str, kind: str, default: Any, description: str, **extra: Any) -> dict[str, Any]:
@@ -158,6 +159,11 @@ PARAMETERS: list[dict[str, Any]] = [
     _p("exclusion", "exclude_ids", "id_list", [], "Clip ids that are never shown (letter case is ignored; "
        "byte-identical copies under other ids are excluded too). An id that matches no clip in the pool is counted "
        "and warned about, and is an error when given with --exclude-id. At most 10,000 ids."),
+    # ---- encoding
+    _p("encoding", "events", "enum", "reroll", "How a clip change is written into the state. reroll: a run of "
+       "reroll events searched until the engine's hash lands on the clip (engine 1.0.0, readable by every engine). "
+       "cue: one cue event that pins the loop to the clip (engine 1.2.0, about one event per change instead of about "
+       "one per bank clip; a reader that does not know 1.2.0 refuses the state).", choices=list(ENCODINGS)),
     # ---- limits
     _p("limits", "max_events", "integer", 150_000, "Refuse a request whose estimated event count exceeds this (the "
        "repository's validate_state grows super-linearly with events).", min=100, max=1_000_000),

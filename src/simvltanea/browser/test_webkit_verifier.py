@@ -77,6 +77,21 @@ for (const [index, decoded, callbacks] of [[87, .6, 101], [88, .7, 102]]) {
 Object.freeze(result.requestFailures);
 '''
 
+DEFERRED_STANDBY_BLOB = r"""
+// A hidden standby finishes loading (ready 4), its read is cancelled, and it only decodes once promoted later.
+const standbyUrl = 'blob:http://127.0.0.1/standby-deferred';
+result.requestFailures = [Object.freeze({wall: 12100, phase: 'controlled-diagnostic-prelude', url: standbyUrl,
+  failure: {errorText: 'cancelled'}})];
+for (let index = 80; index <= 110; index++) {
+  const promoted = index >= 100;
+  result.samples[index].decks = [{id: 'loop-1', deck: 1, active: false, populated: true, src: standbyUrl,
+    currentSrc: standbyUrl, ready: 4, weight: promoted ? 0.3 : 0, nativeError: null,
+    decoded: promoted ? (index - 99) / 10 : 0, callbacks: promoted ? index : 1,
+    progress: {foreground: promoted, foregroundSince: promoted ? 14000 : null}}];
+}
+Object.freeze(result.requestFailures);
+"""
+
 PRELUDE_TRACE_RECOVERY = TRACE_RECOVERY + r'''
 result.progressSchema = 1;
 result.prelude = {samples: [{...result.samples[100]}]};
@@ -378,6 +393,30 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
         self.assertEqual(recovered[0]['url'], 'blob:http://127.0.0.1/recovered')
         self.assertEqual([frame['decoded'] for frame in recovered[0]['frames']], [.6, .7])
         self.assertEqual([frame['callbacks'] for frame in recovered[0]['frames']], [101, 102])
+
+    def test_cancelled_read_of_loaded_standby_is_cleared_by_its_own_later_decode(self):
+        summary = classify_resources(DEFERRED_STANDBY_BLOB)
+        errors = summary['resourceErrors']
+        self.assertEqual(errors['unexpected'], [], summary)
+        self.assertEqual(len(errors['recoveredReads']), 1)
+        self.assertGreater(errors['recoveredReads'][0]['frames'][0]['wall'], 13000)
+
+    def test_deferred_standby_recovery_needs_continuous_ownership_and_real_advance(self):
+        for label, mutation in (
+            ('retired', "result.events.push({type: 'resource-retired', role: 'deck', id: 'loop-1', url: standbyUrl,"
+                        " wall: 20000, readyState: 0, paused: true});"),
+            ('not loaded', 'result.samples[86].decks[0].ready = 3;'),
+            ('active before error', 'result.samples[86].decks[0].active = true;'),
+            ('visible before error', 'result.samples[86].decks[0].weight = 0.2;'),
+            ('native error', "result.samples[95].decks[0].nativeError = {code: 3};"),
+            ('ownership gap', 'result.samples[97].decks = [];'),
+            ('other source', "result.samples[98].decks[0].src = 'blob:other';"),
+            ('never advances', 'for (let i = 100; i <= 110; i++) {result.samples[i].decks[0].decoded = 0;}'),
+            ('callbacks stuck', 'for (let i = 100; i <= 110; i++) {result.samples[i].decks[0].callbacks = 1;}'),
+        ):
+            with self.subTest(label):
+                summary = classify_resources(DEFERRED_STANDBY_BLOB + mutation)
+                self.assertEqual(len(summary['resourceErrors']['unexpected']), 1, summary)
 
     def test_deliberately_aborted_fetch_is_reported_with_exact_prior_proof(self):
         summary = classify(ABORTED_FETCH)

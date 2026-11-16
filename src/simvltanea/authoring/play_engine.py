@@ -468,7 +468,7 @@ def schedule_play(pool: list[dict[str, Any]], n: int, config: Mapping[str, Any] 
     ids = sorted(records)
     schedule = build_schedule(model, ids, seq if shape in CURSOR_SHAPES or shape == "round" else ids, loop_ids,
                               adjacency, cfg, frames, fps, seed)
-    state, stats = encode_state(schedule, records, base, seed, limits["max_events"])
+    state, stats = encode_state(schedule, records, base, seed, limits["max_events"], cfg["encoding"]["events"])
     span_limit = MAX_SEGMENTS * len(loop_ids)
     spans = count_plan_spans(schedule, state, span_limit)
     if spans > span_limit:
@@ -531,7 +531,9 @@ def _budget(cfg: Mapping[str, Any], n: int, frames: int, fps: int, pool: int) ->
         lo = max(1, int((timing["hold_min"] * fps + 0.5) // 1))
         hi = max(1, int((timing["hold_max"] * fps + 0.5) // 1))
         mean_hold = (lo + hi) / 2
-    estimate = estimate_events(n, frames, mean_hold, pool)
+    # A cue state writes one event per clip change, not a run of rerolls searched through the bank.
+    estimate = (n * (int(frames / mean_hold) + 1) if cfg["encoding"]["events"] == "cue"
+                else estimate_events(n, frames, mean_hold, pool))
     if estimate > limits["max_events"]:
         raise PlayError(f"estimated {estimate} events exceeds limits.max_events={limits['max_events']}; "
                         "shorten the duration, lengthen the holds or lower the loop count")

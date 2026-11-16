@@ -2,6 +2,7 @@
 from . import (composition, composition_model, artifact001_layouts, gravity_affinity, gravity_scheduler,
                play_config, play_encode, play_engine, play_order, play_paths, play_pool, play_presets, play_rng)
 from .composition import (
+    CUE_ENGINE_VERSION,
     ENGINE_VERSION,
     SCHEMA_VERSION,
     ORIENTATIONS,
@@ -79,6 +80,7 @@ __all__ = [
     'play_pool',
     'play_presets',
     'play_rng',
+    'CUE_ENGINE_VERSION',
     'ENGINE_VERSION',
     'SCHEMA_VERSION',
     'ORIENTATIONS',

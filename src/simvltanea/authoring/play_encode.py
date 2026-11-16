@@ -1,12 +1,15 @@
 """Schedule -> schema-1 composition state, plus the budgets that keep it renderable and validatable.
 
-The state uses only the existing vocabulary and engine version:
+By default the state uses only the existing vocabulary and engine version (``events="reroll"``); with
+``events="cue"`` each clip change is one "cue" event instead of a run of rerolls, and the state carries
+``CUE_ENGINE_VERSION`` (no other state changes version):
   * loop.bank   = the ordered set of clips that loop will ever be rerolled onto;
   * loop.epoch  = the initial epoch whose sha256 pick is the scheduled first clip;
   * loop.period = larger than the loop's whole local timeline, so source changes happen only
                   through events;
   * "reroll"    events (one or more at the same frame) advance the epoch until
                   ``composition.choose_source`` lands on the scheduled clip;
+  * "cue"       events (``events="cue"`` only) pin a loop to a named clip, one event per change;
   * "swap"      events exchange two loops' clips (spatial gravity), clocks untouched.
 """
 from __future__ import annotations
@@ -18,8 +21,8 @@ from fractions import Fraction
 from typing import Any, Iterable
 
 from .artifact001_layouts import build_artifact001
-from .composition import RNG as SCHEMA_RNG, canonical_json, from_authoring_model
-from .play_config import PlayError
+from .composition import CUE_ENGINE_VERSION, RNG as SCHEMA_RNG, canonical_json, from_authoring_model
+from .play_config import ENCODINGS, PlayError
 
 PERIOD = "1000000"
 
@@ -78,8 +81,13 @@ def _schema_pick(seed: Any, loop_id: str, epoch: int, bank: list[str]) -> str:
 
 
 def encode_state(schedule: Schedule, records: dict[str, dict[str, Any]], base_state: dict[str, Any],
-                 seed: Any, max_events: int | None = None) -> tuple[dict[str, Any], dict[str, int]]:
-    """Encode a Schedule using only existing ops. Returns (state, encoding stats)."""
+                 seed: Any, max_events: int | None = None, events: str = "reroll") -> tuple[dict[str, Any], dict[str, int]]:
+    """Encode a Schedule: ``events="reroll"`` uses only the original ops, ``"cue"`` one cue per clip change.
+
+    Returns (state, encoding stats).
+    """
+    if events not in ENCODINGS:
+        raise PlayError(f"encoding.events must be one of {list(ENCODINGS)}, got {events!r}")
     state = copy.deepcopy(base_state)
     loop_ids = schedule.loop_ids
     banks: dict[str, set[str]] = {l: {schedule.initial[l]} for l in loop_ids}
@@ -107,10 +115,17 @@ def encode_state(schedule: Schedule, records: dict[str, dict[str, Any]], base_st
         horizon = Fraction(loop["offset"]) + Fraction(schedule.frames, schedule.fps) * Fraction(loop["rate"])
         if horizon >= Fraction(PERIOD):
             raise PlayError("composition longer than selection period")
-    events, rerolls = [], 0
+    events_out, rerolls, cues = [], 0, 0
     for ch in schedule.changes:
         if ch["op"] == "swap":
-            events.append(dict(op="swap", frame=ch["frame"], a=ch["a"], b=ch["b"]))
+            events_out.append(dict(op="swap", frame=ch["frame"], a=ch["a"], b=ch["b"]))
+            continue
+        if events == "cue":
+            if max_events is not None and len(events_out) + 1 > max_events:
+                raise PlayError(f"the state would need at least {len(events_out) + 1} events, more than "
+                                f"limits.max_events={max_events}")
+            events_out.append(dict(op="cue", frame=ch["frame"], loop=ch["loop"], source=ch["clip"]))
+            cues += 1
             continue
         lid, k = ch["loop"], 0
         while True:
@@ -119,17 +134,21 @@ def encode_state(schedule: Schedule, records: dict[str, dict[str, Any]], base_st
                 break
         epochs[lid] += k
         rerolls += k
-        # ``events`` already holds every earlier reroll, so the total after this change is len(events) + k.
-        if max_events is not None and len(events) + k > max_events:
-            raise PlayError(f"the state would need at least {len(events) + k} events, more than "
+        # ``events_out`` already holds every earlier event, so the total after this change is len(events_out) + k.
+        if max_events is not None and len(events_out) + k > max_events:
+            raise PlayError(f"the state would need at least {len(events_out) + k} events, more than "
                             f"limits.max_events={max_events}")
-        events.extend(dict(op="reroll", frame=ch["frame"], loop=lid) for _ in range(k))
-    state["events"] = events
+        events_out.extend(dict(op="reroll", frame=ch["frame"], loop=lid) for _ in range(k))
+    state["events"] = events_out
+    if events == "cue":
+        state["engine_version"] = CUE_ENGINE_VERSION
     stats = {"clip_changes": sum(ch["op"] == "show" for ch in schedule.changes),
              "swap_events": sum(ch["op"] == "swap" for ch in schedule.changes),
-             "reroll_events": rerolls, "total_events": len(events),
+             "reroll_events": rerolls, "total_events": len(events_out),
              "mean_bank_size": round(sum(len(b) for b in bank_lists.values()) / len(bank_lists), 2),
              "max_epoch": max(epochs.values()) if epochs else 0}
+    if events == "cue":
+        stats["cue_events"] = cues
     return state, stats
 
 

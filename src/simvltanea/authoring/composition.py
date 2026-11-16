@@ -27,6 +27,9 @@ from simvltanea.authoring.composition_model import (
 
 SCHEMA_VERSION = 1
 ENGINE_VERSION = "1.0.0"
+# Schema-1 states that may carry "cue" events (a loop is pinned to a named source with one event). A state
+# without a cue keeps ENGINE_VERSION and stays byte-identical; this version is only for states that use one.
+CUE_ENGINE_VERSION = "1.2.0"
 AUDIO_SCHEMA_VERSION = "1.1"
 AUDIO_ENGINE_VERSION = "1.1.0"
 RNG = "sha256-counter-v1"
@@ -255,8 +258,9 @@ def validate_state(state: dict) -> None:
     version = state["schema_version"]
     legacy = type(version) is int and version == SCHEMA_VERSION
     require(legacy or (type(version) is str and version == AUDIO_SCHEMA_VERSION), "unsupported schema_version")
-    require(state["engine_version"] == (ENGINE_VERSION if legacy else AUDIO_ENGINE_VERSION),
+    require(state["engine_version"] in ((ENGINE_VERSION, CUE_ENGINE_VERSION) if legacy else (AUDIO_ENGINE_VERSION,)),
             "unsupported engine_version")
+    cue_allowed = state["engine_version"] == CUE_ENGINE_VERSION
     require(state["rng"] == RNG, "unsupported randomness algorithm")
     require(type(state["seed"]) in (str, int), "seed must be a string or integer")
     integer(state["fps"], 1, 60, "fps")
@@ -316,6 +320,8 @@ def validate_state(state: dict) -> None:
         op = event.get("op")
         extra = {"hold": {"loop", "value"}, "reroll": {"loop"},
                  "swap": {"a", "b"}, "move": {"loop", "orientation", "rect"}}
+        if cue_allowed:
+            extra["cue"] = {"loop", "source"}
         require(isinstance(op, str) and op in extra, f"unsupported event: {op}")
         fields = {"op", "frame"} | extra[op]
         keys(event, fields, fields, "event")
@@ -329,6 +335,9 @@ def validate_state(state: dict) -> None:
             require(type(event["value"]) is bool, "hold.value must be boolean")
         elif op == "swap":
             require(event["a"] != event["b"], "swap requires two different loops")
+        elif op == "cue":
+            require(isinstance(event["source"], str) and event["source"] in sources,
+                    f"cue references absent source: {event['source']}")
         elif op == "move":
             require(event["orientation"] in ORIENTATIONS, "move requires an orientation")
             rect_values(event["rect"])
@@ -484,6 +493,8 @@ def _replay_event(state: dict, loops: dict, layouts: dict, event: dict) -> None:
         loop = loops[event["loop"]]
         loop["epoch"] += 1
         loop["pin"] = None
+    elif op == "cue":
+        loops[event["loop"]]["pin"] = event["source"]
     elif op == "swap":
         a, b = loops[event["a"]], loops[event["b"]]
         a["pin"], b["pin"] = choose_source(state, b, at), choose_source(state, a, at)

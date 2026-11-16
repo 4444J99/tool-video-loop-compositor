@@ -7,7 +7,7 @@
  * performs build_preview's media rebasing so browser.runtime.js plays it unchanged.
  *
  * Supported subset (everything else throws CompilerError; nothing is approximated):
- *   - schema_version 1, engine_version "1.0.0", silent audio {mode: "none"};
+ *   - schema_version 1, engine_version "1.0.0" (engine 1.2.0, the cue encoding, is refused as unsupported), silent audio {mode: "none"};
  *   - 1..12 loops (the engine-wide browser subset; which counts a layout family
  *     offers comes from the layout bundle, never from a constant here), each with
  *     a bank of one or more sources; every declared source in some bank, distinct
@@ -543,6 +543,7 @@
     need(STATE_FIELDS.every(key => has(state, key)), 'state: missing required fields');
     refuse(state.schema_version === '1.1', 'Audio v1.1 (schema_version "1.1") is compiled by Python only');
     need(state.schema_version === 1, 'unsupported schema_version');
+    refuse(state.engine_version === '1.2.0', 'Engine 1.2.0 (cue events) is compiled by Python only');
     need(state.engine_version === ENGINE_VERSION, 'unsupported engine_version');
     need(state.rng === RNG, 'unsupported randomness algorithm');
     need(typeof state.seed === 'string' || Number.isSafeInteger(state.seed), 'seed must be a string or safe integer');

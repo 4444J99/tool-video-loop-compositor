@@ -484,7 +484,7 @@ parkedRows[0].decks[1].decoded = null;
                 self.assertFalse(summary['pass'], summary)
                 self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
 
-    def test_incoming_deck_may_wrap_its_own_loop_once_before_promotion(self):
+    def test_incoming_deck_may_wrap_its_own_loop_before_promotion_only_with_wrap_evidence(self):
         # Run 43801218533 (seek-cohort-candidate, prelude): the visible incoming deck of a short clip wrapped its loop
         # before promotion; one observation read seeking, media time went 0.83 to 0 and a new frame callback landed.
         wrap = r'''
@@ -503,14 +503,13 @@ for (const row of parkRows.slice(-1)) {
         self.assertTrue(summary['pass'], summary)
         self.assertEqual(len(summary['resourceErrors']['admittedPreparations']), 1)
         for refusal in (
-            # Seeking with no backward media time is not a wrap.
-            "parkRows.at(-2).decks[1].progress.mediaTime = .1; parkRows.at(-2).decks[1].progress.trace.at(-1).mediaTime = .1;",
-            # Seeking with no new frame callback is a stuck seek.
-            "parkRows.at(-2).decks[1].progress.changes = parkRows.at(-2).decks[1].progress.sourceChanges = 3;",
-            # A second seeking observation in a row has no earlier frame to wrap from.
+            # Seeking with no backward media time is not a wrap (rows kept self-consistent so only that rule decides).
+            "for (const row of parkRows.slice(-2)) {const p = row.decks[1].progress; p.mediaTime = .1; "
+            "p.trace.at(-1).mediaTime = .1; row.decks[1].decoded = .1;}",
+            # A seek that persists into the next row (media time not moving back again) is not a second wrap.
             "parkRows.at(-1).decks[1].seeking = true; parkRows.at(-1).decks[1].progress.changes = "
             "parkRows.at(-1).decks[1].progress.sourceChanges = 5; parkRows.at(-1).decks[1].progress.mediaTime = 0;",
-            # The deck before the wrap must itself not be seeking.
+            # A seeking first row has no earlier observation to wrap from.
             "parkRows.at(-3).decks[1].seeking = true;",
         ):
             with self.subTest(refusal=refusal):

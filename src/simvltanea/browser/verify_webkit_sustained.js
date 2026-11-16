@@ -270,10 +270,12 @@ function admittedPreparation(result, error, expectedRetirements) {
     const state = context(rows[index]);
     // A visible incoming deck of a short clip can wrap its own loop before promotion. That native loop seek reads
     // seeking for one observation, but is positively evidenced by a new frame callback whose media time moved back
-    // (run 43801218533, seek-cohort-candidate: media time 0.83 to 0, one frame later). A seek with no new frame, no
-    // backward media time, or two in a row (the second has no earlier frame to wrap from) is still refused.
-    const wrapSeek = Boolean(state?.deck.seeking && earlier && state.progress.changes > earlier.progress.changes &&
-      state.progress.mediaTime + .05 < earlier.progress.mediaTime && !earlier.deck.seeking);
+    // (run 43801218533, seek-cohort-candidate: media time 0.83 to 0, one frame later). The deck's trace is validated frame by
+    // frame (traceFrames), so a media time that moved back is itself a new delivered frame. A seek with no
+    // backward media time is still refused, and so is a seeking first row (nothing earlier to wrap from). Every seeking row
+    // must carry its own wrap evidence, so a seek that merely persists across rows (media time not moving back again) fails.
+    const wrapSeek = Boolean(state?.deck.seeking && earlier &&
+      state.progress.mediaTime + .05 < earlier.progress.mediaTime);
     if (!state || state.deck.paused || (state.deck.seeking && !wrapSeek) || state.deck.currentSrc !== url || state.deck.ready < 3 ||
         state.progress.foregroundSince !== foregroundAt || !validProgress(state.progress, state.row.wall, true)) return null;
     earlier = state;

@@ -219,8 +219,8 @@ Decided 2026-11-15 (issue 71), recorded here because they govern this page:
 
 - **Speech policy stays `mute`.** The lab shows the owner's real library, and speech can carry names, numbers and
   private conversation that the frames never show. The picture still plays; the owner can switch
-  `audio.speech_policy` to `play` for a local session, and no preset, scene or RANDOMIZE changes it. About 43% of
-  the library has speech, so a muted lab is quiet for those clips by design. Sound follows the surface: the public
+  `audio.speech_policy` to `play` for a local session, and no preset, scene or RANDOMIZE changes it. Roughly a third to 43% of
+  the clips that have audio carry speech, so a muted lab is quiet for those clips by design. Sound follows the surface: the public
   demo (`tools/media/build_public_demo.py`, `--audio keep`) and the public studio publish voices because the owner
   decided they may be published; this lab is a private, local view that fails closed, and the one switch to `play`
   is the owner's to flip per session.

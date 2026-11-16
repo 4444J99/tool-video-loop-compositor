@@ -155,7 +155,7 @@ checks that shape), and it compiles as before. What the browser still refuses, w
 ("outside the browser compiler subset"): `hold` and `move` events, which play states do not contain. The web
 studio builds its states from the videos a visitor picks and has no control that opens a state file, so a page
 or tool must pass the play state to the compiler itself. A `cue` state (engine 1.2.0) is refused by the
-browser compiler as an unsupported engine version until the compiler learns it (see [The cue event](#the-cue-event)).
+browser compiler (`unsupported === true`: Python compiles it) until the compiler learns it (see [The cue event](#the-cue-event)).
 
 ## The four dials
 
@@ -712,10 +712,10 @@ Versioning, so nothing existing changes:
   1.0.0 event, so a 1.2.0 state without cues is valid.
 - A cue-encoded state shows, at every frame, what the reroll-encoded state of the same schedule shows
   (`test_cue_event.py`).
-- The browser compiler and runtime still read 1.0.0 and 1.1.0 only and refuse 1.2.0 as `unsupported engine_version`
-  (the same rule that already refuses a state it does not know). Teaching them 1.2.0 is a versioned roll of the
-  compiler and runtime pair, kept out of this change so it does not collide with the studio files that are being
-  repaired (issues 126 to 130).
+- The browser compiler reads engine 1.0.0 only (the studio's runtime plans add 1.1.0) and refuses a 1.2.0 state
+  as `unsupported === true` ("outside the browser compiler subset": Python compiles it, the browser does not yet);
+  the runtime rejects a 1.2.0 plan. Teaching them 1.2.0 is a versioned roll of the compiler and runtime pair, kept
+  out of this change so it does not collide with the studio files that are being repaired (issues 126 to 130).
 
 ## Owner decisions
 

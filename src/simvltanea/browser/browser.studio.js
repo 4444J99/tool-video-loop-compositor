@@ -1252,6 +1252,9 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   /* Compile layout/export metadata, then reconcile residents in place. The live
    * session owns native loops; editing metadata never restarts its global clock. */
   async function launch({atLoopBoundary = false, shareMix, repair = null} = {}) {
+    // A playback-only relaunch (resume, an evolve replacement) that lands while an
+    // earlier launch still owns the retry budget inherits it; edits clear it.
+    if (repair) loopRepair = repair; else repair = loopRepair;
     const bounded = boundedSelection(selection);
     if (bounded !== selection) { selection = bounded; renderControls(); }
     const token = ++launches, r = runtime(), requested = selection, sourcePool = pool();
@@ -1269,6 +1272,8 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
             node.active?.residentIdentity === residentIdentity)));
     const finish = () => {
       if (token !== launches) return;
+      // No newer launch can inherit the budget, so it is spent with this one.
+      loopRepair = null;
       if (!published && !ownsIntent()) return;
       const previousCurrent = session && r.plan === session.plan && r.nodes.size === session.byTrack.size &&
         [...session.byTrack].every(([id, item]) => r.nodes.get(id)?.active && r.nodes.get(id).item === item);
@@ -1376,10 +1381,19 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       renderControls();
       if (r.ready) studio.dataset.phase = 'playing';
       if (usingLibrary()) prefetchNext();
+      // Remember which retained entries are readiness deferrals (transient), as
+      // opposed to a decode or playback failure (not retried): the next edit
+      // replaces the former in its own launch. A resident from another source
+      // pool (loops entry null) has nothing in this pool to be replaced by.
+      for (const id of deferredSlots) {
+        const slot = Number(id.slice('loop-'.length)) - 1, item = selection.retained?.get(slot);
+        if (item && selection.loops[slot] !== null) deferredHeld.set(slot, item);
+      }
+      for (const [slot, item] of deferredHeld) if (selection.retained?.get(slot) !== item) deferredHeld.delete(slot);
       // A deferral keeps the exact old variant, and nothing else would revisit
       // it. A loop-mode toggle re-attempts the handoff a bounded number of times.
       if (repair?.attempts > 0 && !completed && changed && deferredSlots.size)
-        scheduleLoopModeRepair(selection, repair.attempts, actualItems, deferredSlots);
+        scheduleLoopModeRepair(repair.attempts, actualItems, deferredSlots);
       return completed;
     } catch (error) {
       if (token === launches && error.name !== 'AbortError') toast(oneLine(error.message || error));
@@ -1390,34 +1404,49 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   }
   // The toggle's own handoff can be deferred when the incoming clip never
   // presented fresh frames in time (a starved page). The studio then describes
-  // the exact mixed field, which is correct, but nothing would revisit it and
-  // the field would stay mixed until the next edit. Re-attempt after one outgoing
-  // loop (frames that were not ready then usually are now), at most
-  // LOOP_MODE_REPAIR_ATTEMPTS times, and only after a genuine readiness deferral
-  // (a decode or playback error is not transient and is not retried). The attempt
-  // lapses once any edit replaces the selection; a deferral past the bound keeps
-  // today's mixed outcome.
+  // the exact mixed field, which is correct, but nothing would revisit it.
+  // Re-attempt after one outgoing loop of the deferred panel itself (frames that
+  // were not ready then usually are now), at most LOOP_MODE_REPAIR_ATTEMPTS
+  // times, and only after a genuine readiness deferral (a decode or playback
+  // error is not transient and is not retried). The attempt is keyed to the
+  // deferred panels' retained entries, not to the whole selection: a sibling
+  // panel replaced meanwhile (evolve) or a playback-only relaunch leaves it
+  // alone, while anything that replaces or drops the entry ends it. A user edit
+  // cancels it outright and replaces every deferred panel in its own launch
+  // (dropDeferredRetention); a deferral past the bound keeps today's mixed
+  // outcome until that next edit.
   const LOOP_MODE_REPAIR_ATTEMPTS = 2;
   let repairTimer = null;
-  function scheduleLoopModeRepair(owner, attempts, resident, deferredSlots) {
+  // The toggle's remaining attempts, carried across a playback-only relaunch.
+  let loopRepair = null;
+  // Slot -> retained old item, for readiness deferrals only.
+  const deferredHeld = new Map();
+  function dropDeferredRetention() {
+    if (!selection || !deferredHeld.size) return;
+    const retained = new Map(selection.retained || []);
+    for (const [slot, item] of deferredHeld) if (retained.get(slot) === item) retained.delete(slot);
+    deferredHeld.clear();
+    selection = {...selection, retained};
+  }
+  function scheduleLoopModeRepair(attempts, resident, deferredSlots) {
     clearTimeout(repairTimer);
-    const delayMs = repairDelayMs(resident);
+    // The deferred panels' own outgoing loops, not the longest resident's.
+    const delayMs = repairDelayMs(resident.filter((_, index) => deferredSlots.has(`loop-${index + 1}`)));
+    const owned = new Map([...(selection.retained || [])].filter(([slot]) =>
+      deferredSlots.has(`loop-${slot + 1}`) && selection.loops[slot] !== null));
     const attempt = () => {
       repairTimer = null;
-      // Keyed to the user intent, not to the selection object or launch counter:
-      // a playback-only relaunch (resume, repair) republishes the same intent and
-      // must not cancel the repair, while any edit changes it and does.
-      if (!sameIntent(selection, owner)) return;
+      // Only slots whose own handoff was deferred and which still hold that very
+      // entry: a sibling that failed to decode or play is not transient and is
+      // left alone, and a slot replaced since has nothing left to repair.
+      const stale = [...owned].filter(([slot, item]) => selection?.retained?.get(slot) === item &&
+        item.clip && item.asset && item.asset.id !== assetFor(item).id);
+      if (!stale.length) return;
       // Paused, held or hidden pages cannot present fresh frames: wait, without
       // spending an attempt, until the studio is running again.
       if (document.hidden || hold || paused) { repairTimer = setTimeout(attempt, delayMs); return; }
-      // Only slots whose own handoff was deferred: a sibling that failed to
-      // decode or play is not transient and is left alone.
-      const stale = [...(selection.retained || [])].filter(([slot, item]) =>
-        deferredSlots.has(`loop-${slot + 1}`) && item.clip && item.asset && item.asset.id !== assetFor(item).id);
-      if (!stale.length) return;
       const retained = new Map(selection.retained);
-      for (const [slot] of stale) retained.delete(slot);
+      for (const [slot] of stale) { retained.delete(slot); deferredHeld.delete(slot); }
       selection = {...selection, retained};
       runtime()?.record('handoff-reattempt', null, {slots: stale.map(([slot]) => slot), remaining: attempts - 1});
       launch({shareMix: true, repair: {attempts: attempts - 1}});
@@ -1485,12 +1514,14 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     selection = rolled;
     // A user edit owns the field: a pending repair must not outlive it, even if
     // the edit is refused or reverted and the intent happens to match again.
-    clearTimeout(repairTimer); repairTimer = null;
+    clearTimeout(repairTimer); repairTimer = null; loopRepair = null; deferredHeld.clear();
     renderControls();
     launch({shareMix: manualPopulation});
   }
   function edited() {
-    clearTimeout(repairTimer); repairTimer = null;
+    clearTimeout(repairTimer); repairTimer = null; loopRepair = null;
+    // The edit's own launch replaces a readiness-deferred panel that keeps its slot.
+    dropDeferredRetention();
     renderControls();
     launch({shareMix: true});
   }
@@ -2170,7 +2201,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     ui.filterTune.setAttribute('aria-expanded', 'false'); ui.filterTune.focus(); wake();
   });
   ui.loopMode.addEventListener('click', () => {
-    clearTimeout(repairTimer);
+    clearTimeout(repairTimer); deferredHeld.clear();
     loopMode = loopMode === 'boomerang' ? 'forward' : 'boomerang';
     for (const job of library.inflight.values()) job.controller.abort();
     library.inflight.clear(); library.cache.clear(); library.broken.clear(); library.prefetch = []; library.next = null;

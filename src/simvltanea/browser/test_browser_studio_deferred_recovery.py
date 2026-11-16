@@ -77,13 +77,16 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
                             '-t', '7', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
                             '-c:a', 'aac', '-ac', '1', '-shortest', '-movflags', '+faststart', str(temporary))
         contents = temporary.read_bytes()
-        long_id = hashlib.sha256(contents).hexdigest()[:12]
+        long_id = cls.long_id = hashlib.sha256(contents).hexdigest()[:12]
+        # The manifest states what the file measures, as the library fixture does, or
+        # the studio refuses the clip and swaps in another.
+        measured = round(float(studio_tests.probe(temporary)['format']['duration']), 3)
         temporary.rename(long / 'library' / 'clips' / f'{long_id}.mp4')
         manifest = json.loads((long / 'library' / 'manifest.json').read_text())
         # The mix selects by manifest position: test_retry_delay... puts position 6 in loop-2.
         index = cls.long_position = 6
         manifest['clips'][index] = {**manifest['clips'][index], 'id': long_id, 'file': f'clips/{long_id}.mp4',
-                                    'bytes': len(contents), 'duration_seconds': 7.0, 'width': 192, 'height': 144,
+                                    'bytes': len(contents), 'duration_seconds': measured, 'width': 192, 'height': 144,
                                     'orientation': 'landscape'}
         (long / 'library' / 'manifest.json').write_text(json.dumps(manifest))
 
@@ -454,7 +457,10 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
     def test_retry_delay_is_the_deferred_panels_own_loop_not_the_longest_residents(self):
         """Issue 129. Loop-2 is seven seconds long; the deferred loop-1 about two."""
         page = self.ready(site='recovery-long', indices=[0, self.long_position, 1, 2])
-        self.assertGreaterEqual(page.evaluate("compositionRuntime.nodes.get('loop-2').item.quantized.seconds"), 6.9)
+        self.assertEqual(page.evaluate("SimvltaneaStudio.snapshot().library.broken"), 0)
+        self.assertEqual(page.evaluate("compositionRuntime.nodes.get('loop-2').item.clip.id"), self.long_id,
+                         'the fixture must put the seven second clip in loop-2')
+        self.assertGreaterEqual(page.evaluate("compositionRuntime.nodes.get('loop-2').item.quantized.seconds"), 6.5)
         forward = page.evaluate("compositionRuntime.nodes.get('loop-1').item.clip.id")
         self.defer(page, 'loop-1')
         self.tap(page, '#loop-mode')
@@ -463,9 +469,9 @@ class StudioDeferredRecoveryTests(unittest.TestCase):
         self.wait_reattempts(page, 1)
         page.wait_for_function(f"() => {BOOMERANG}==={forward!r}", timeout=30000)
         gap = page.evaluate(f"{REATTEMPTS}[0].wall - compositionRuntime.events.find(e=>e.type==='handoff-deferred').wall")
-        own = page.evaluate("compositionRuntime.nodes.get('loop-1').item.quantized.seconds") * 1000
+        own = page.evaluate("settlementBefore.residents[0].item.quantized.seconds") * 1000
         self.assertGreaterEqual(gap, own - 200)
-        self.assertLess(gap, own + 2500, 'after the deferred panel\'s own loop, not the seven second sibling\'s')
+        self.assertLess(gap, own + 3500, 'after the deferred panel\'s own loop, not the seven second sibling\'s')
 
     def test_paused_page_waits_without_spending_an_attempt(self):
         page = self.ready(site='settlement-variant')

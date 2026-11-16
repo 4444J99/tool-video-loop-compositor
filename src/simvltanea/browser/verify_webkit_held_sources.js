@@ -25,11 +25,8 @@ const ORIGIN = Object.freeze({run: '42431559354', artifact: '13597902240',
 // maximum (maxGapMs) then stays latched at that value for the rest of the source's
 // life. Validity is therefore judged on the *recent* signal: a sample is a stall
 // sample when the current gap is at the ceiling or the maximum has just risen to it.
-// A bounded number of stall episodes is tolerated, each bounded in TIME by the cap, the same rule the session
-// judge applies (STALL_CAP_MS, MAX_STALL_EPISODES in verify_webkit_sustained.js). A decoder that stays frozen reaches
-// the cap and fails; so does one that stalls repeatedly. A run is never counted in samples: the host samples every
-// 137 to 200 ms, so a sample count turned a recovered 3.3 s stall (all four residents at once, runs 43744728683 and
-// 43721281441) into a failure that the session judge itself tolerated.
+// A bounded number of short stall runs is tolerated; a decoder that stays frozen
+// (one that reaches the native cap) or stalls repeatedly (many episodes) still fails.
 const OBSERVATION_LIMIT_MS = 10000;
 const GAP_CEILING_MS = 2000, GAP_CAP_MS = 4000, MAX_STALL_EPISODES = 2;
 function stallStep(state, current, max) {
@@ -37,9 +34,12 @@ function stallStep(state, current, max) {
   if (![current, max].every(gap => Number.isFinite(gap) && gap >= 0) || max < current || max >= GAP_CAP_MS) return 'fail';
   const stalled = current >= GAP_CEILING_MS || (max >= GAP_CEILING_MS && max !== state.max);
   state.max = max;
-  if (!stalled) { state.stalled = false; return 'ok'; }
-  if (!state.stalled) state.episodes = (state.episodes || 0) + 1;
-  state.stalled = true;
+  if (!stalled) { state.inStall = false; return 'ok'; }
+  // An episode is a contiguous run of stalled samples. Its length is bounded in native time (GAP_CAP_MS, above),
+  // never in sample count: the sampler polls faster while a stall is in progress, so a host-wide pause of three
+  // seconds yields as many samples as the sampler happens to take, and that count says nothing about the decoder.
+  if (!state.inStall) state.episodes = (state.episodes || 0) + 1;
+  state.inStall = true;
   return state.episodes > MAX_STALL_EPISODES ? 'fail' : 'stall';
 }
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');

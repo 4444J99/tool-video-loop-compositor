@@ -180,6 +180,24 @@ result.consoleErrors.push({wall: 118161, url: parkedUrl,
 parkRows.push({wall: 118200, nodes: [], decks: []});
 '''
 
+STANDBY_RETIRED_AFTER_FAILURE = r"""
+// Issue 115, hosted run 43803782592: a hidden standby's cancelled read reached the runner 107 ms before the page's
+// retirement stamp. Identity (never visible or active) proves the read, not clock order.
+const retiredUrl = 'blob:http://127.0.0.1/standby-retired';
+const standbyDeck = (extra = {}) => ({id: 'loop-1', deck: 1, active: false, populated: true, src: retiredUrl,
+  currentSrc: retiredUrl, ready: 0, weight: 0, nativeError: null,
+  progress: {foreground: false, foregroundSince: null}, ...extra});
+for (const index of [84, 85, 86]) result.samples[index].decks = [standbyDeck()];
+result.samples[87].decks = [{id: 'loop-1', deck: 1, active: false, populated: false, src: '', currentSrc: retiredUrl,
+  ready: 0, weight: 0, nativeError: null}];
+result.events.push({type: 'resource-retired', role: 'deck', id: 'loop-1', url: retiredUrl, wall: 12107,
+  readyState: 0, paused: true});
+result.requestFailures = [{wall: 12000, phase: 'sustained', url: retiredUrl, failure: {errorText: 'cancelled'}}];
+"""
+
+# The standby is still observed hidden until the late retirement, so only the window can refuse it.
+LATE_RETIREMENT = "for (let index = 87; index < 93; index++) result.samples[index].decks = [standbyDeck()];"
+
 
 def classify(mutation: str = '') -> dict:
     program = FIXTURE + mutation + '\nprocess.stdout.write(JSON.stringify(analyse(result)));'
@@ -244,6 +262,55 @@ result.samples[100].decks = [{active: false, populated: false, src: '', currentS
 ''')
         self.assertTrue(summary['pass'], summary)
         self.assertEqual(summary['resourceErrors']['expectedRetirements'][0]['lagMs'], 9000)
+
+    def test_hidden_standby_retired_after_its_failure_is_clock_skew_not_a_fault(self):
+        errors = classify_resources(STANDBY_RETIRED_AFTER_FAILURE)['resourceErrors']
+        self.assertEqual(errors['unexpected'], [])
+        self.assertEqual(len(errors['expectedRetirements']), 1)
+        self.assertEqual(errors['expectedRetirements'][0]['lagMs'], -107)
+        # Bounded by the sampler's measured skew, inclusive.
+        summary = classify_resources(STANDBY_RETIRED_AFTER_FAILURE + LATE_RETIREMENT + 'result.events[0].wall = 13000;')
+        self.assertEqual(summary['resourceErrors']['unexpected'], [])
+
+    def test_retirement_after_the_failure_needs_each_hidden_standby_term(self):
+        for label, mutation in (
+            ('window exceeded', LATE_RETIREMENT + 'result.events[0].wall = 13001;'),
+            ('metadata role', "result.events[0].role = 'metadata';"),
+            ('active deck', 'result.samples[85].decks[0].active = true;'),
+            ('active flag absent', 'delete result.samples[85].decks[0].active;'),
+            ('visible weight', 'result.samples[85].decks[0].weight = 0.1;'),
+            ('weight absent', 'delete result.samples[85].decks[0].weight;'),
+            ('foreground flag', 'result.samples[85].decks[0].progress.foreground = true;'),
+            ('foreground flag absent', 'delete result.samples[85].decks[0].progress.foreground;'),
+            ('foreground start', 'result.samples[85].decks[0].progress.foregroundSince = 11000;'),
+            ('foreground start absent', 'delete result.samples[85].decks[0].progress.foregroundSince;'),
+            ('progress absent', 'delete result.samples[85].decks[0].progress;'),
+            ('other deck id', "result.samples[85].decks[0].id = 'loop-2';"),
+            ('never observed', 'for (const index of [84, 85, 86]) delete result.samples[index].decks;'),
+            ('never populated', 'for (const index of [84, 85, 86]) result.samples[index].decks[0].populated = false;'),
+            ('observed only by stale native source',
+             'for (const index of [84, 85, 86]) result.samples[index].decks[0].src = "";'),
+            ('visible only after the failure',
+             'result.samples[86].decks[0].active = true; result.samples[86].decks[0].weight = 1;'),
+            ('active deck known only by its native currentSrc',
+             "result.samples[85].decks.push({id: 'loop-1', deck: 0, active: true, populated: true, src: 'blob:other',"
+             " currentSrc: retiredUrl, weight: 1, progress: {foreground: true, foregroundSince: 9000}});"),
+            ('re-admitted after retirement', 'result.samples[88].decks = [standbyDeck()];'),
+        ):
+            with self.subTest(label):
+                summary = classify_resources(STANDBY_RETIRED_AFTER_FAILURE + mutation)
+                self.assertEqual(len(summary['resourceErrors']['unexpected']), 1, summary)
+                self.assertEqual(summary['resourceErrors']['expectedRetirements'], [])
+
+    def test_active_deck_cancelled_then_retired_later_stays_unexpected(self):
+        active = "{id: 'loop-1', deck: 1, active: true, populated: true, src: retiredUrl, currentSrc: retiredUrl," \
+            " ready: 4, weight: 1, nativeError: null, progress: {foreground: true, foregroundSince: 9000}}"
+        for retired_at in (12001, 12100, 12107):
+            with self.subTest(retired_at=retired_at):
+                summary = classify_resources(STANDBY_RETIRED_AFTER_FAILURE
+                    + f'for (const index of [84, 85, 86]) result.samples[index].decks = [{active}];'
+                    + f'result.events[0].wall = {retired_at};')
+                self.assertEqual(len(summary['resourceErrors']['unexpected']), 1, summary)
 
     def test_source_readmission_after_error_invalidates_retirement_proof(self):
         for deck in (

@@ -92,6 +92,32 @@ for (let index = 80; index <= 110; index++) {
 Object.freeze(result.requestFailures);
 """
 
+LOADING_STANDBY_BLOB = r'''
+// Issue 144: a loading hidden standby (ready < 4 at the cancelled read) reaches
+// ready 4 shortly after the cancel, stays continuously owned by the same deck,
+// source and native epoch, then promotes and decodes advancing frames as the
+// active resident. #143's ready-4-at-the-error rule does not cover it.
+const loadingUrl = 'blob:http://127.0.0.1/loading-standby';
+result.progressSchema = 1;
+result.requestFailures = [Object.freeze({wall: 12100, phase: 'sustained', url: loadingUrl, method: 'GET',
+  resourceType: 'other', failure: {errorText: 'cancelled'}})];
+for (let index = 84; index <= 95; index++) {
+  const wall = index * 140;
+  const active = index >= 92;
+  const ready = index < 88 ? 0 : 4;
+  const weight = active ? 0.3 : 0;
+  const decoded = index >= 94 ? (index - 93) / 10 : 0;
+  result.samples[index].decks = [{id: 'loop-1', deck: 0, active, populated: true, src: loadingUrl,
+    currentSrc: loadingUrl, ready, weight, nativeError: null, decoded, callbacks: index,
+    progress: {schema: 1, supported: true, live: true, url: loadingUrl, epoch: 1,
+      changes: index + 1, sourceChanges: index + 1, lastChangeWall: wall, mediaTime: decoded,
+      foreground: active, running: true,
+      foregroundSince: active ? 12880 : null,
+      lastForegroundChangeWall: active ? wall : null, currentGapMs: 0, maxGapMs: 140, lifetimeMaxGapMs: 140}}];
+}
+Object.freeze(result.requestFailures);
+'''
+
 PRELUDE_TRACE_RECOVERY = TRACE_RECOVERY + r'''
 result.progressSchema = 1;
 result.prelude = {samples: [{...result.samples[100]}]};
@@ -416,6 +442,37 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
         ):
             with self.subTest(label):
                 summary = classify_resources(DEFERRED_STANDBY_BLOB + mutation)
+                self.assertEqual(len(summary['resourceErrors']['unexpected']), 1, summary)
+
+    def test_cancelled_read_of_loading_standby_cleared_by_its_own_load_and_promote(self):
+        # Issue 144: a loading hidden standby (ready < 4 at the cancelled read)
+        # that reaches ready 4 shortly after, stays continuously owned by the
+        # same deck, source and native epoch, then promotes and decodes advancing
+        # frames as the active resident is a recovered read, not a playback fault.
+        summary = classify_resources(LOADING_STANDBY_BLOB)
+        errors = summary['resourceErrors']
+        self.assertEqual(errors['unexpected'], [], summary)
+        self.assertEqual(len(errors['recoveredReads']), 1)
+        recovery = errors['recoveredReads'][0]
+        self.assertEqual(recovery['url'], 'blob:http://127.0.0.1/loading-standby')
+        self.assertEqual(recovery['readyAt'], 88 * 140)
+        self.assertEqual(recovery['promotedAt'], 92 * 140)
+        self.assertEqual([frame['decoded'] for frame in recovery['frames']], [0, 0.1])
+        self.assertEqual([frame['callbacks'] for frame in recovery['frames']], [93, 94])
+
+    def test_loading_standby_recovery_needs_continuous_ownership_and_real_advance(self):
+        for label, mutation in (
+            ('never loads', 'for (let i = 84; i <= 95; i++) result.samples[i].decks[0].ready = 0;'),
+            ('active before the cancel', 'result.samples[86].decks[0].active = true;'),
+            ('visible before the cancel', 'result.samples[86].decks[0].weight = 0.2;'),
+            ('native error while loading', 'result.samples[86].decks[0].nativeError = {code: 3};'),
+            ('ownership gap', 'result.samples[90].decks = [];'),
+            ('other source after the cancel', "result.samples[91].decks[0].src = 'blob:other';"),
+            ('never advances', 'for (let i = 92; i <= 95; i++) {result.samples[i].decks[0].decoded = 0; result.samples[i].decks[0].callbacks = 1;}'),
+            ('retired before recovery', "result.events.push({type: 'resource-retired', role: 'deck', id: 'loop-1', url: 'blob:http://127.0.0.1/loading-standby', wall: 12500, readyState: 0, paused: true});"),
+        ):
+            with self.subTest(label):
+                summary = classify_resources(LOADING_STANDBY_BLOB + mutation)
                 self.assertEqual(len(summary['resourceErrors']['unexpected']), 1, summary)
 
     def test_deliberately_aborted_fetch_is_reported_with_exact_prior_proof(self):

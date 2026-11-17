@@ -313,6 +313,29 @@ console.log(JSON.stringify(input.map(plan => {
                  node_plan(1, '1/20', '1/20'), legacy]
         self.assertEqual(self.outcomes(plans), [None] * len(plans))
 
+    def test_cue_plan_is_accepted_and_mismatched_versions_are_refused(self):
+        """A 1.2.0 cue plan (plan 1, silent) passes validatePlan; cross-version envelopes do not."""
+        from simvltanea.authoring.test_play_support import cfg, play
+        state = play(cfg('sticky', encoding={'events': 'cue'}), 3, 20, seed=7, pool=60)['state']
+        self.assertEqual(state['engine_version'], '1.2.0')
+        plan = compile_plan(state)
+        for source in plan['sources']:
+            source['bytes'] = 1000
+            # Stage the media paths the way build_preview/stagePreview rebases them.
+            source['path'] = f"media/{source['sha256']}.mp4"
+        self.assertEqual((plan['plan_version'], plan['engine_version'], plan['audio']), (1, '1.2.0', 'none'))
+        wrong_engine = copy.deepcopy(plan)
+        wrong_engine['engine_version'] = '1.1.0'
+        wrong_plan_version = copy.deepcopy(plan)
+        wrong_plan_version['plan_version'] = 2
+        audio_object = copy.deepcopy(plan)
+        audio_object['audio'] = {'mode': 'none', 'routing': None, 'generative': None}
+        outcomes = self.outcomes([plan, wrong_engine, wrong_plan_version, audio_object])
+        self.assertIsNone(outcomes[0])
+        for outcome in outcomes[1:]:
+            self.assertIsNotNone(outcome)
+            self.assertIn('version/audio', outcome)
+
     def test_out_of_bounds_and_unknown_fields_are_refused(self):
         base = node_plan(5, '1/40', '1/40')
         portrait = lambda plan: plan['layout_keyframes'][0]['layouts']['portrait']

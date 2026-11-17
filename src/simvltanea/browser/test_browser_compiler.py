@@ -4,7 +4,7 @@ Supported subset, mirrored from the compiler header: schema_version 1 with
 silent audio; N=1..12 loops; banks of one or more sources with seeded selection,
 every source in some bank, distinct IDs and media digests, allow_source_reuse
 false; video and still sources; offset, rate, trim and initial held; fps 1..60;
-reroll and swap events (every play state); layouts with the optional full_bleed,
+reroll, swap and cue events (every play state); layouts with the optional full_bleed,
 presentation and lateral_offset declarations; the state-wide slice, enabled or
 not; seam absent or disabled. Inside the subset the JavaScript plan must equal
 Python's compile_plan byte for byte. Outside it the JavaScript must throw a
@@ -1288,7 +1288,7 @@ def source_at(spans: list[dict], frame: int) -> str:
 
 
 class PlayStateCompilerTests(unittest.TestCase):
-    """Play states (reroll and swap events over multi-source banks) compile to Python's plan exactly."""
+    """Play states (reroll, swap and cue events over multi-source banks) compile to Python's plan exactly."""
 
     def assertSamePlan(self, javascript: dict, python: dict):
         self.assertEqual(javascript, python)
@@ -1330,6 +1330,38 @@ class PlayStateCompilerTests(unittest.TestCase):
                 self.assertSamePlan(result['value'], compile_plan(state))
                 spans = sum(len(track['spans']) for track in result['value']['tracks'])
                 self.assertGreater(spans, len(state['loops']), 'events must split spans')
+
+    def test_cue_play_states_match_python_at_every_change_frame(self):
+        cases = {
+            'n3-cue': play_state(3, 60, seed='three', encoding={'events': 'cue'})['state'],
+            'n7-cue': play_state(7, 60, encoding={'events': 'cue'})['state'],
+        }
+        for name, state in list(cases.items()):
+            sliced = copy.deepcopy(state)
+            sliced['slice'] = {'enabled': True, 'width': '1/3', 'height': '1/2'}
+            cases[f'{name}-slice'] = sliced
+        results = node(*(['compilePlan', state] for state in cases.values()))
+        for (name, state), result in zip(cases.items(), results):
+            with self.subTest(case=name):
+                self.assertEqual(state['engine_version'], c.CUE_ENGINE_VERSION)
+                self.assertTrue(any(event['op'] == 'cue' for event in state['events']))
+                self.assertTrue(result['ok'], result)
+                self.assertSamePlan(result['value'], compile_plan(state))
+                tracks = {track['id']: track['spans'] for track in result['value']['tracks']}
+                # A cue pins its loop to the named source from its frame onward, unless a
+                # later event at the same frame re-pins that loop.
+                for index, event in enumerate(state['events']):
+                    if event['op'] != 'cue':
+                        continue
+                    later = [e for e in state['events'][index + 1:]
+                             if e['frame'] == event['frame']
+                             and (e.get('loop') == event['loop']
+                                  or event['loop'] in (e.get('a'), e.get('b')))]
+                    if later:
+                        continue
+                    with self.subTest(event=event):
+                        self.assertEqual(source_at(tracks[event['loop']], event['frame']),
+                                         event['source'], event)
 
     def test_positive_controls_a_mutated_seed_or_event_changes_the_plan(self):
         out = play_state(3, 30, timing={'swap_interval': 2.0})
@@ -1433,7 +1465,7 @@ class PlayStateCompilerTests(unittest.TestCase):
         with self.assertRaisesRegex(c.StateError, 'does not fit loop trim'):
             compile_plan(too_long)
 
-    def test_unsupported_constructs_in_a_play_state_are_still_refused(self):
+    def test_cue_compiles_while_hold_move_and_seam_are_still_refused(self):
         state = play_state(3, 20)['state']
         last = state['frames'] - 1
         with_hold = dict(copy.deepcopy(state), events=[*state['events'],
@@ -1447,11 +1479,10 @@ class PlayStateCompilerTests(unittest.TestCase):
         self.assertEqual(cue_state['engine_version'], c.CUE_ENGINE_VERSION)
         self.assertTrue(any(event['op'] == 'cue' for event in cue_state['events']))
         cue_result, = node(['compilePlan', cue_state])
-        self.assertFalse(cue_result['ok'], cue_result)
-        self.assertEqual(cue_result['name'], 'CompilerError')
-        self.assertRegex(cue_result['message'], '^outside the browser compiler subset: Engine 1.2.0 \\(cue events\\)')
-        self.assertTrue(cue_result['unsupported'], cue_result)
-        compile_plan(cue_state)                    # Python compiles it: the refusal is a gap, not a verdict
+        self.assertTrue(cue_result['ok'], cue_result)
+        self.assertSamePlan(cue_result['value'], compile_plan(cue_state))
+        # A cue in a 1.0.0 state is still Python's 'unsupported event: cue': the cue
+        # vocabulary belongs to engine 1.2.0 only.
         results = node(*(['compilePlan', s] for s in (with_hold, with_move, with_cue, with_seam)))
         for name, mutant, result, pattern, python_compiles in (
                 ('hold', with_hold, results[0], 'hold and move events are resolved by composition.py only', True),

@@ -7,7 +7,7 @@
  * performs build_preview's media rebasing so browser.runtime.js plays it unchanged.
  *
  * Supported subset (everything else throws CompilerError; nothing is approximated):
- *   - schema_version 1, engine_version "1.0.0" (engine 1.2.0, the cue encoding, is refused as unsupported), silent audio {mode: "none"};
+ *   - schema_version 1, engine_version "1.0.0" or "1.2.0" (the cue encoding), silent audio {mode: "none"};
  *   - 1..12 loops (the engine-wide browser subset; which counts a layout family
  *     offers comes from the layout bundle, never from a constant here), each with
  *     a bank of one or more sources; every declared source in some bank, distinct
@@ -15,9 +15,10 @@
  *     and allow_source_reuse false (N independent loops, no filler, no duplication);
  *   - seeded bank selection, as composition.choose_source does it: SHA-256 of the
  *     canonical JSON [rng, seed, loop, epoch, cycle, bank], modulo the bank size;
- *   - reroll and swap events, the vocabulary of every play state (play_encode.py):
+ *   - reroll, swap and cue events, the vocabulary of every play state (play_encode.py):
  *     applied in array order at their frames, a reroll advancing the loop's epoch and
- *     clearing its pin, a swap pinning each loop to the other's current source. The
+ *     clearing its pin, a swap pinning each loop to the other's current source, a cue
+ *     pinning one loop to a named source. The
  *     compiler walks the events once, in order (O(frames x loops + events));
  *   - video and still sources; per-loop offset, rate, trim and initial held flag;
  *     any fps in 1..60 and frames in 1..14400;
@@ -65,7 +66,7 @@
  */
 (function (root) {
   'use strict';
-  const ENGINE_VERSION = '1.0.0', RNG = 'sha256-counter-v1', PLAN_VERSION = 1;
+  const ENGINE_VERSION = '1.0.0', CUE_ENGINE_VERSION = '1.2.0', RNG = 'sha256-counter-v1', PLAN_VERSION = 1;
   const MAX_FRAMES = 14400, MAX_SEGMENTS = 1024, MAX_MEDIA_BYTES = 256 * 1024 * 1024;
   // The engine-wide browser subset. Which counts a family offers is read from the layout bundle.
   const MIN_LOOPS = 1, MAX_LOOPS = 12;
@@ -77,11 +78,11 @@
     'loops', 'layouts', 'events', 'audio', 'allow_source_reuse'];
   const SOURCE_FIELDS = ['id', 'path', 'sha256', 'kind', 'duration'];
   const LOOP_FIELDS = ['id', 'bank', 'offset', 'rate', 'period', 'epoch', 'held'];
-  // composition.validate_state's event vocabulary. The compiler reads reroll and swap, the only
+  // composition.validate_state's event vocabulary. The compiler reads reroll, swap and cue, the
   // operations play states use; hold and move are validated, then refused.
-  const COMPILED_EVENTS = ['reroll', 'swap'];
+  const COMPILED_EVENTS = ['reroll', 'swap', 'cue'];
   const EVENT_FIELDS = new Map([['hold', ['loop', 'value']], ['reroll', ['loop']], ['swap', ['a', 'b']],
-    ['move', ['loop', 'orientation', 'rect']]]);
+    ['cue', ['loop', 'source']], ['move', ['loop', 'orientation', 'rect']]]);
   // Layout keys, mirrored from authoring/layout_presets.py (LAYOUT_FIELDS, CELL_FIELDS, ...).
   const LAYOUT_FIELDS = ['name', 'cells', 'full_bleed', 'presentation'];
   const CELL_FIELDS = ['loop', 'rect', 'fit', 'focal', 'lateral_offset'], CELL_REQUIRED = ['loop', 'rect', 'fit', 'focal'];
@@ -543,8 +544,8 @@
     need(STATE_FIELDS.every(key => has(state, key)), 'state: missing required fields');
     refuse(state.schema_version === '1.1', 'Audio v1.1 (schema_version "1.1") is compiled by Python only');
     need(state.schema_version === 1, 'unsupported schema_version');
-    refuse(state.engine_version === '1.2.0', 'Engine 1.2.0 (cue events) is compiled by Python only');
-    need(state.engine_version === ENGINE_VERSION, 'unsupported engine_version');
+    need(state.engine_version === ENGINE_VERSION || state.engine_version === CUE_ENGINE_VERSION,
+      'unsupported engine_version');
     need(state.rng === RNG, 'unsupported randomness algorithm');
     need(typeof state.seed === 'string' || Number.isSafeInteger(state.seed), 'seed must be a string or safe integer');
     integer(state.fps, 1, 60, 'fps');
@@ -607,9 +608,9 @@
         sigma: within('seam.sigma', [1n, 10n], true),
         mode: value => need(SEAM_MODES.includes(value), `seam.mode must be one of ${SEAM_MODES.join(', ')}`)});
     }
-    validateEvents(state, loopIds);
+    validateEvents(state, loopIds, sources);
     refuse(state.events.some(event => !COMPILED_EVENTS.includes(event.op)),
-      'hold and move events are resolved by composition.py only; the browser compiler reads reroll and swap events');
+      'hold and move events are resolved by composition.py only; the browser compiler reads reroll, swap and cue events');
     refuse(state.allow_source_reuse, 'allow_source_reuse must be false (no implicit duplication)');
     // composition.validate_state resolves frame 0 and every event frame; no two loops may show one source.
     const walk = resolver(state);
@@ -626,13 +627,16 @@
 
   // composition.validate_state's event checks, with its messages. Every operation Python reads is
   // checked here; validateState then refuses hold and move.
-  function validateEvents(state, loopIds) {
+  function validateEvents(state, loopIds, sources) {
     need(Array.isArray(state.events), 'events must be an array');
     let previous = -1;
     for (const event of state.events) {
       need(isObject(event), 'event must be an object');
       const op = has(event, 'op') ? event.op : null;
       need(typeof op === 'string' && EVENT_FIELDS.has(op), `unsupported event: ${op === null ? 'None' : op}`);
+      // composition.validate_state admits cue only for engine 1.2.0; a cue in a 1.0.0 state is
+      // Python's 'unsupported event: cue', not a missing-field error, so this runs before fields().
+      need(op !== 'cue' || state.engine_version === CUE_ENGINE_VERSION, `unsupported event: ${op}`);
       const allowed = ['op', 'frame', ...EVENT_FIELDS.get(op)];
       fields(event, allowed, allowed, 'event');
       integer(event.frame, 0, state.frames - 1, 'event.frame');
@@ -645,6 +649,8 @@
       }
       if (op === 'hold') need(typeof event.value === 'boolean', 'hold.value must be boolean');
       else if (op === 'swap') need(event.a !== event.b, 'swap requires two different loops');
+      else if (op === 'cue') need(typeof event.source === 'string' && sources.has(event.source),
+        `cue references absent source: ${event.source}`);
       else if (op === 'move') {
         need(ORIENTATIONS.includes(event.orientation), 'move requires an orientation');
         rectOf(event.rect, {}, strictRead);
@@ -658,7 +664,7 @@
    * after resolve_at's checks (a swapped source must fit the loop trim; no source reuse). Visit
    * frames in increasing order. Each event is applied once and a loop hashes only when its epoch
    * or selection cycle changes, so a compile costs O(frames x loops + events), not
-   * O(frames x events). Only reroll and swap get here: validateState refuses hold and move. */
+   * O(frames x events). Only reroll, swap and cue get here: validateState refuses hold and move. */
   function resolver(state) {
     const fps = BigInt(state.fps), sources = new Map(state.sources.map(source => [source.id, source]));
     const durations = new Map(state.sources.map(source => [source.id, rational(source.duration, 'duration')]));
@@ -700,6 +706,10 @@
           const [pinA, pinB] = [chooseAt(b, event.frame), chooseAt(a, event.frame)];
           a.pin = pinA;
           b.pin = pinB;
+        } else if (event.op === 'cue') {
+          // One loop pinned to the named source, as in Python's _replay_event; a later reroll
+          // clears the pin and a later cue re-pins it.
+          byId.get(event.loop).pin = event.source;
         } else {
           throw new CompilerError(`${event.op} events are resolved by composition.py only`, true);
         }

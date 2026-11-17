@@ -14,7 +14,7 @@ import unittest
 import wave
 
 from simvltanea import subprocess_retry as retry
-from simvltanea.browser.silent_browser import (INIT_SCRIPT_PATH, MUTE_ARGS, init_script, silence_context, silent_args, silent_launch,
+from simvltanea.browser.silent_browser import (FIREFOX_PREFS, INIT_SCRIPT_PATH, MUTE_ARGS, init_script, silence_context, silent_args, silent_launch,
                                                silent_launch_persistent_context)
 from simvltanea.browser.test_browser_compiler import node_executable
 from simvltanea.browser.test_browser_runtime import browser_executable
@@ -102,6 +102,22 @@ class SilentLaunchContractTests(unittest.TestCase):
     def test_webkit_and_firefox_have_no_flag_and_rely_on_the_init_script(self):
         self.assertEqual(silent_args('webkit', ['--x']), ['--x'])
         self.assertEqual(silent_args('firefox'), [])
+
+    def test_firefox_gets_volume_scale_pref_merged_with_callers_prefs(self):
+        engine = FakeEngine('firefox')
+        silent_launch(engine, headless=True, firefox_user_prefs={'foo': 1})
+        self.assertEqual(engine.launched['firefox_user_prefs'], {'foo': 1, **FIREFOX_PREFS})
+        self.assertTrue(engine.launched['headless'])
+
+    def test_firefox_missing_prefs_still_gets_volume_scale(self):
+        engine = FakeEngine('firefox')
+        silent_launch(engine, headless=True)
+        self.assertEqual(engine.launched['firefox_user_prefs'], dict(FIREFOX_PREFS))
+
+    def test_firefox_persistent_context_gets_volume_scale_pref(self):
+        engine = FakeEngine('firefox')
+        context = silent_launch_persistent_context(engine, '/profile', args=['--no-sandbox'])
+        self.assertEqual(engine.launched['firefox_user_prefs'], dict(FIREFOX_PREFS))
 
     def test_every_context_and_page_gets_the_init_script(self):
         browser = silent_launch(FakeEngine('webkit'))

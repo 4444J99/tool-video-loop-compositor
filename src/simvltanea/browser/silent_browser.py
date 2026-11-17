@@ -4,10 +4,15 @@ Owner rule: no test or tool may produce audible sound on the host. The mute sits
 every launch passes through, and ``test_silent_browser_lint`` fails when a launch bypasses it:
 
 * Chromium gets ``--mute-audio`` merged into the caller's own arguments.
+* Firefox gets ``media.volume_scale=0.0`` merged into ``firefox_user_prefs`` (it has no mute flag either).
 * Every engine gets ``silent_init.js`` in every context (``new_context`` and ``new_page``, which makes its own
   context), so media elements are pinned muted with volume 0 and every realtime AudioContext destination connection
   goes through a gain-0 sink. The script is engine-agnostic: WebKit has no mute flag, so the script is its mute.
 
+Limit (WebKit): media inside a *closed declarative* shadow root (``shadowrootmode="closed"`` in parsed HTML) has no
+handle a page script can reach (``host.shadowRoot`` is null and the parser never calls ``attachShadow``), so the
+init script cannot pin it. Chromium is covered by ``--mute-audio`` and Firefox by the pref above; for WebKit this
+limit is documented rather than enforced. No check page in this repository uses a closed declarative shadow root.
 Nothing here touches the system volume or the output device.
 """
 from __future__ import annotations
@@ -18,6 +23,7 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 INIT_SCRIPT_PATH = HERE / 'silent_init.js'
 MUTE_ARGS = ('--mute-audio',)
+FIREFOX_PREFS = {'media.volume_scale': 0.0}
 
 
 def init_script() -> str:
@@ -71,6 +77,11 @@ def silence_browser(browser: Any) -> Any:
 def silent_launch(engine: Any, **kwargs: Any) -> Any:
     """``playwright.<engine>.launch(**kwargs)`` with the mute applied at the source."""
     kwargs['args'] = silent_args(engine.name, kwargs.get('args'))
+    if engine.name == 'firefox':
+        prefs = dict(kwargs.get('firefox_user_prefs') or {})
+        for key, value in FIREFOX_PREFS.items():
+            prefs.setdefault(key, value)
+        kwargs['firefox_user_prefs'] = prefs
     return silence_browser(engine.launch(**kwargs))
 
 
@@ -78,6 +89,11 @@ def silent_launch_persistent_context(engine: Any, user_data_dir: str, **kwargs: 
     """A persistent context is created with its first page already open, so that page's document is silenced by
     running the init script in it now; every later document and navigation gets it from the context."""
     kwargs['args'] = silent_args(engine.name, kwargs.get('args'))
+    if engine.name == 'firefox':
+        prefs = dict(kwargs.get('firefox_user_prefs') or {})
+        for key, value in FIREFOX_PREFS.items():
+            prefs.setdefault(key, value)
+        kwargs['firefox_user_prefs'] = prefs
     context = silence_context(engine.launch_persistent_context(user_data_dir, **kwargs))
     script = init_script()
     for page in context.pages:

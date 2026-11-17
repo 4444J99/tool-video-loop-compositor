@@ -9,6 +9,7 @@ const path = require('node:path');
 
 const INIT_SCRIPT_PATH = path.join(__dirname, 'silent_init.js');
 const MUTE_ARGS = ['--mute-audio'];
+const FIREFOX_PREFS = {'media.volume_scale': 0.0};
 const initScript = () => fs.readFileSync(INIT_SCRIPT_PATH, 'utf8');
 
 const engineName = engine => (typeof engine.name === 'function' ? engine.name() : engine.name);
@@ -41,15 +42,28 @@ function silenceBrowser(browser) {
 }
 
 async function silentLaunch(engine, options = {}) {
-  return silenceBrowser(await engine.launch({...options, args: silentArgs(engineName(engine), options.args)}));
+  const name = engineName(engine);
+  const launchOptions = {...options, args: silentArgs(name, options.args)};
+  if (name === 'firefox') {
+    launchOptions.firefoxUserPrefs = {...(options.firefoxUserPrefs || {}), ...FIREFOX_PREFS};
+    // keep caller prefs authoritative where already set
+    for (const key of Object.keys(options.firefoxUserPrefs || {})) launchOptions.firefoxUserPrefs[key] = options.firefoxUserPrefs[key];
+  }
+  return silenceBrowser(await engine.launch(launchOptions));
 }
 
 // A persistent context is created with its first page already open, so that page's document is silenced by running
 // the init script in it now; every later document and navigation gets it from the context.
 async function silentLaunchPersistentContext(engine, userDataDir, options = {}) {
-  const context = await silenceContext(await engine.launchPersistentContext(userDataDir, {...options, args: silentArgs(engineName(engine), options.args)}));
+  const name = engineName(engine);
+  const launchOptions = {...options, args: silentArgs(name, options.args)};
+  if (name === 'firefox') {
+    launchOptions.firefoxUserPrefs = {...(options.firefoxUserPrefs || {}), ...FIREFOX_PREFS};
+    for (const key of Object.keys(options.firefoxUserPrefs || {})) launchOptions.firefoxUserPrefs[key] = options.firefoxUserPrefs[key];
+  }
+  const context = await silenceContext(await engine.launchPersistentContext(userDataDir, launchOptions));
   for (const page of context.pages()) await page.evaluate(initScript());
   return context;
 }
 
-module.exports = {INIT_SCRIPT_PATH, MUTE_ARGS, initScript, silentArgs, silenceContext, silenceBrowser, silentLaunch, silentLaunchPersistentContext};
+module.exports = {INIT_SCRIPT_PATH, MUTE_ARGS, FIREFOX_PREFS, initScript, silentArgs, silenceContext, silenceBrowser, silentLaunch, silentLaunchPersistentContext};

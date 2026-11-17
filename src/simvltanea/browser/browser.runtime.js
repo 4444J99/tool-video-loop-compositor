@@ -1127,6 +1127,7 @@ function validatePlan(plan) {
   const ident = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(value);
   const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   need(plan && ((plan.plan_version===1 && plan.engine_version==='1.0.0' && plan.audio==='none') ||
+    (plan.plan_version===1 && plan.engine_version==='1.2.0' && plan.audio==='none') ||
     (plan.plan_version===2 && plan.engine_version==='1.1.0' && plan.audio &&
       ['none','soundtrack','spatial_loops'].includes(plan.audio.mode))), 'version/audio');
   need(hash(plan.state_sha256), 'state hash');

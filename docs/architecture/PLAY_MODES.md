@@ -712,10 +712,10 @@ Versioning, so nothing existing changes:
   1.0.0 event, so a 1.2.0 state without cues is valid.
 - A cue-encoded state shows, at every frame, what the reroll-encoded state of the same schedule shows
   (`test_cue_event.py`).
-- The browser compiler reads engine 1.0.0 only (the studio's runtime plans add 1.1.0) and refuses a 1.2.0 state
-  as `unsupported === true` ("outside the browser compiler subset": Python compiles it, the browser does not yet);
-  the runtime rejects a 1.2.0 plan. Teaching them 1.2.0 is a versioned roll of the compiler and runtime pair, kept
-  out of this change so it does not collide with the studio files that are being repaired (issues 126 to 130).
+- The browser compiler reads engine 1.0.0 and 1.2.0 (a cue state compiles to Python's plan exactly, plan 1,
+  silent audio), and the runtime accepts a plan-1 1.2.0 plan. Teaching them 1.2.0 was the versioned roll of the
+  compiler and runtime pair (issue 140): a 1.0.0 state still compiles byte-identically, and existing share links
+  keep their bytes (the roll digest is unchanged).
 
 ## Owner decisions
 

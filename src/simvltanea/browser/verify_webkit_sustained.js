@@ -144,16 +144,37 @@ function traceFrames(result, url) {
     invalid, nativeFailure, ambiguous: owners.size > 1};
 }
 
+const hiddenStandby = deck => deck.weight === 0 && deck.progress?.foreground !== true &&
+  deck.progress?.foregroundSince == null;
+
+function cleanMediaRequest(result, error, expectedRetirements) {
+  return result.progressSchema === 1 && error.method === 'GET' && error.resourceType === 'other' &&
+    !result.errors?.length && !(result.consoleErrors || []).some((row, index) => row.url === error.url &&
+      !expectedRetirements.some(record => record.kind === 'consoleErrors' && record.index === index && record.url === row.url)) &&
+    !(result.httpErrors || []).some(row => row.url === error.url);
+}
+
+function advancingFramePair(frames) {
+  const previous = new Map();
+  for (const frame of frames) {
+    const sequence = frame.origin === 'callback-trace' ? frame.changes : frame.callbacks;
+    if (typeof frame.id !== 'string' || !Number.isFinite(frame.deck) ||
+        !Number.isFinite(frame.decoded) || !Number.isFinite(sequence)) continue;
+    const identity = JSON.stringify([frame.id, frame.deck, frame.epoch, frame.origin]), old = previous.get(identity);
+    const oldSequence = old?.origin === 'callback-trace' ? old.changes : old?.callbacks;
+    if (old && frame.wall > old.wall && frame.decoded !== old.decoded && sequence > oldSequence) return [old, frame];
+    previous.set(identity, frame);
+  }
+  return undefined;
+}
+
 function admittedPreparation(result, error, expectedRetirements) {
   // A hidden preparation can cancel an internal read just before being parked.
   // This proves a later successful admission, never that pause caused the error.
   // Generic active-source recovery retains its separate 1,000 ms deadline.
   // Console records are classified first. A positively proven disposal of this
   // URL does not invalidate its earlier admission; every other console error does.
-  if (result.progressSchema !== 1 || error.method !== 'GET' || error.resourceType !== 'other' ||
-      result.errors?.length || (result.consoleErrors || []).some((row, index) => row.url === error.url &&
-        !expectedRetirements.some(record => record.kind === 'consoleErrors' && record.index === index && record.url === row.url)) ||
-      (result.httpErrors || []).some(row => row.url === error.url)) return null;
+  if (!cleanMediaRequest(result, error, expectedRetirements)) return null;
   const rows = result.samples, url = error.url;
   const afterIndex = rows.findIndex(row => row.wall >= error.wall);
   if (afterIndex < 1) return null;
@@ -291,6 +312,91 @@ function admittedPreparation(result, error, expectedRetirements) {
   return null;
 }
 
+function recoveredLoadingStandby(result, error, expectedRetirements) {
+  // A loading hidden standby (ready < 4 before the cancelled read) can finish
+  // loading to ready 4 shortly after the cancel, stay continuously owned by
+  // the same deck, url and native epoch, and later promote and decode advancing
+  // frames as the active resident. Keep this separate from admittedPreparation
+  // (parked handoff) and #143 (already ready 4 at the error).
+  if (!cleanMediaRequest(result, error, expectedRetirements)) return null;
+  const rows = result.samples, url = error.url;
+  const afterIndex = rows.findIndex(row => row.wall >= error.wall);
+  if (afterIndex < 1) return null;
+  const before = rows[afterIndex - 1], after = rows[afterIndex];
+  if (after.wall - before.wall > 1000 || before.wall > error.wall) return null;
+  const present = row => (row.decks || []).filter(deck => deck.populated && deck.src === url);
+  const initial = present(before);
+  if (initial.length !== 1) return null;
+  const owner = initial[0], epoch = owner.progress?.epoch;
+  if (!(owner.ready >= 0 && owner.ready < 4) || owner.active || owner.nativeError || !hiddenStandby(owner) ||
+      !validProgress(owner.progress, before.wall) || owner.progress.url !== url ||
+      before.running !== true || before.hidden !== false || before.audioState !== 'running' ||
+      before.lastFailure) return null;
+  if (rows.slice(0, afterIndex).some(row => (row.decks || []).some(deck =>
+      (deck.src === url || deck.currentSrc === url) &&
+      (deck.active || deck.weight > 0 || deck.progress?.foreground || deck.progress?.foregroundSince != null))))
+    return null;
+  const trace = traceFrames(result, url);
+  if (trace.invalid || trace.nativeFailure || trace.ambiguous) return null;
+  const ownDeck = row => {
+    const found = present(row), deck = found[0];
+    if (found.length !== 1 || deck.id !== owner.id || deck.deck !== owner.deck || deck.nativeError ||
+        !validProgress(deck.progress, row.wall, !!deck.progress?.foreground) ||
+        deck.progress.url !== url || deck.progress.epoch !== epoch ||
+        row.running !== true || row.hidden !== false || row.audioState !== 'running' || row.lastFailure) return null;
+    if ((row.decks || []).some(other => (other.id !== owner.id || other.deck !== owner.deck) &&
+        (other.src === url || other.currentSrc === url))) return null;
+    return deck;
+  };
+  let readyRow = null, promotedRow = null, foregroundAt = null, becameForeground = false;
+  const activeFrames = [];
+  for (let index = afterIndex; index < rows.length; index++) {
+    const row = rows[index];
+    if (!(row.wall > rows[index - 1].wall)) return null;
+    const deck = ownDeck(row);
+    if (!deck) return null;
+    if (!readyRow) {
+      if (row.wall - before.wall > 1000 || deck.active || !hiddenStandby(deck)) return null;
+      if (deck.ready === 4 && deck.currentSrc === url) readyRow = row;
+      continue;
+    }
+    if (!promotedRow) {
+      if (deck.active) {
+        promotedRow = row;
+      } else {
+        if (deck.progress.foreground) {
+          if (foregroundAt === null) foregroundAt = deck.progress.foregroundSince;
+          if (!Number.isFinite(foregroundAt) || deck.progress.foregroundSince !== foregroundAt ||
+              deck.paused || deck.ready < 3 || deck.currentSrc !== url) return null;
+          becameForeground = true;
+        } else if (becameForeground || !hiddenStandby(deck)) {
+          return null;
+        }
+        continue;
+      }
+    }
+    if (!deck.active || deck.paused || deck.ready < 3 || deck.weight <= 0 || deck.currentSrc !== url ||
+        !deck.progress.foreground || deck.progress.sourceChanges < 1) return null;
+    if (foregroundAt === null) foregroundAt = deck.progress.foregroundSince;
+    if (!Number.isFinite(foregroundAt) || deck.progress.foregroundSince !== foregroundAt) return null;
+    const node = (row.nodes || []).find(item => item.id === owner.id);
+    if (node && (node.deck !== owner.deck || node.nativeError || node.paused)) return null;
+    activeFrames.push({wall: row.wall, id: deck.id, deck: deck.deck, epoch,
+      decoded: deck.decoded, callbacks: deck.callbacks, nativeError: deck.nativeError});
+    const combined = [...activeFrames, ...trace.frames.filter(frame => frame.id === owner.id &&
+      frame.deck === owner.deck && frame.epoch === epoch &&
+      frame.wall >= promotedRow.wall && frame.wall <= row.wall)].sort((a, b) => a.wall - b.wall);
+    const proof = advancingFramePair(combined);
+    if (proof) {
+      if ((result.events || []).some(event => event?.type === 'resource-retired' && event.url === url &&
+          (!Number.isFinite(event.wall) || event.wall <= proof[1].wall))) return null;
+      return {id: owner.id, deck: owner.deck, epoch, readyAt: readyRow.wall,
+        promotedAt: promotedRow.wall, frames: proof};
+    }
+  }
+  return null;
+}
+
 const TEARDOWN_YOUNG_MS = 5000;
 // The failure wall is runner receipt time converted to page time; the retirement wall is the page clock. Under host load
 // the two disagree by more than the real ordering (issue 115, hosted run 43803782592: retirement stamped 107 ms AFTER the
@@ -366,8 +472,6 @@ function classifyResourceErrors(result) {
       // Hidden-standby evidence is required, not merely !active: during a crossfade the visible incoming deck already
       // carries weight and foreground progress while node.active has not flipped. A cancelled read on that deck is a
       // playback fault, not a close() artefact.
-      const hiddenStandby = deck => deck.weight === 0 && deck.progress?.foreground !== true &&
-        deck.progress?.foregroundSince == null;
       // (A populated deck without schema-1 progress already fails observation coverage, so absence here is not a bypass.)
       const final = finalRow?.decks?.find(deck => deck.populated && !deck.active && deck.src === url && hiddenStandby(deck));
       // Bound the load age from above with the observation PRECEDING the first row that shows the URL: the assignment
@@ -388,7 +492,7 @@ function classifyResourceErrors(result) {
       // or a future retirement are insufficient. Console failures never qualify.
       if (blob && cancelled) {
         const collect = (from, to, only) => {
-          const frames = [], previous = new Map();
+          const frames = [];
           for (const row of observations) if (row.wall >= from && row.wall <= to) {
             for (const deck of row.decks || []) if (deck.src === url && deck.currentSrc === url) {
               if (only && (deck.id !== only.id || deck.deck !== only.deck)) continue;
@@ -403,16 +507,7 @@ function classifyResourceErrors(result) {
           frames.sort((a, b) => a.wall - b.wall);
           if (trace.invalid || trace.nativeFailure || trace.ambiguous || !frames.length ||
               !frames.every(frame => !frame.nativeError)) return undefined;
-          for (const frame of frames) {
-            const sequence = frame.origin === 'callback-trace' ? frame.changes : frame.callbacks;
-            if (typeof frame.id !== 'string' || !Number.isFinite(frame.deck) ||
-                !Number.isFinite(frame.decoded) || !Number.isFinite(sequence)) continue;
-            const identity = JSON.stringify([frame.id, frame.deck, frame.epoch, frame.origin]), old = previous.get(identity);
-            const oldSequence = old?.origin === 'callback-trace' ? old.changes : old?.callbacks;
-            if (old && frame.wall > old.wall && frame.decoded !== old.decoded && sequence > oldSequence) return [old, frame];
-            previous.set(identity, frame);
-          }
-          return undefined;
+          return advancingFramePair(frames);
         };
         let proof = collect(wall, wall + 1000);
         // A hidden standby whose read had already completed (ready 4, no native error) is not decoding, so a read
@@ -437,6 +532,8 @@ function classifyResourceErrors(result) {
       }
       const admitted = blob && cancelled && admittedPreparation(evidence, error, classified.expectedRetirements);
       if (admitted) { classified.admittedPreparations.push({...reference, ...admitted}); continue; }
+      const standbyLoad = blob && cancelled && recoveredLoadingStandby(evidence, error, classified.expectedRetirements);
+      if (standbyLoad) { classified.recoveredReads.push({...reference, ...standbyLoad}); continue; }
       classified.unexpected.push(reference);
     }
   }

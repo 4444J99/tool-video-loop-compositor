@@ -1,0 +1,22 @@
+{
+ "repo": "simvltanea",
+ "slug": "4444J99/tool-video-loop-compositor",
+ "archived_upstream": false,
+ "prs": {
+  "prs_total": 102,
+  "prs_merged": 100,
+  "prs_open": 0,
+  "prs_closed_unmerged": 2
+ },
+ "closed_classes": {
+  "abandoned": 2
+ },
+ "supersession_links": [],
+ "open_pr_actions": [],
+ "issues": {
+  "total": 45,
+  "open": 5,
+  "stale": 0
+ },
+ "generated": "2026-11-17"
+}

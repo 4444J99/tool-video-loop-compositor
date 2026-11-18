@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-17  
 **Stream:** B (PR / Issue Evolution) of the Autonomous Ecosystem Retirement & Enrichment plan  
-**Method:** full remote inventory via `gh` (all states), heuristic supersession detection, local git/oss evidence. Machine-readable evidence: `.opencode/plans/stream-b/2026-11-17-pr-issue-data.json`  
+**Method:** full remote inventory via `gh` (all states), heuristic supersession detection, local git/oss evidence. Machine-readable evidence: `archive/incubation/2026-11-17-pr-issue-data.json`  
 **Staging run:** `09_Engineering/custody-staging/run-20261117-104235-session-retirement/`
 
 > Supersession links below are **evidence-backed candidates**, not licensed merges. No remote PR was closed and no history was rewritten by this pass. Destructive actions are listed as ready-to-run commands for the owner or the orchestration stream.
@@ -53,6 +53,7 @@ _No supersession links detected: no closed-unmerged PR in this repo has a traced
 ## 5. Open PR triage
 
 _No open PRs._
+
 ## 6. Issues
 
 | Metric | Count |

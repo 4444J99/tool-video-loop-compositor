@@ -4,26 +4,52 @@ Owner rule: no test or tool may produce audible sound on the host. The mute sits
 every launch passes through, and ``test_silent_browser_lint`` fails when a launch bypasses it:
 
 * Chromium gets ``--mute-audio`` merged into the caller's own arguments.
-* Firefox gets ``media.volume_scale=0.0`` merged into ``firefox_user_prefs`` (it has no mute flag either).
+* Firefox has no mute flag and none can be injected: Playwright cannot set the float pref ``media.volume_scale``
+  through ``firefox_user_prefs`` — a number breaks every Firefox launch (juggler calls ``setIntPref`` for any
+  number, the pref is a float, ``NS_ERROR_UNEXPECTED``; verified live at Playwright 1.57.0 / Firefox 144.0.2 in
+  simvltanea #124, and the same signature at 1.62.1 / Firefox 153 in timed-text #89) and a string is stored as a
+  string and ignored by the float getter. Caller prefs are forwarded unchanged and no engine pref is injected;
+  Firefox relies on the init script alone.
 * Every engine gets ``silent_init.js`` in every context (``new_context`` and ``new_page``, which makes its own
   context), so media elements are pinned muted with volume 0 and every realtime AudioContext destination connection
   goes through a gain-0 sink. The script is engine-agnostic: WebKit has no mute flag, so the script is its mute.
 
 Limit (WebKit): media inside a *closed declarative* shadow root (``shadowrootmode="closed"`` in parsed HTML) has no
 handle a page script can reach (``host.shadowRoot`` is null and the parser never calls ``attachShadow``), so the
-init script cannot pin it. Chromium is covered by ``--mute-audio`` and Firefox by the pref above; for WebKit this
-limit is documented rather than enforced. No check page in this repository uses a closed declarative shadow root.
+init script cannot pin it. Chromium covers it with ``--mute-audio``; WebKit refuses such a page at pre-flight
+(``assert_no_closed_shadow_roots``: the test harness calls it for every page it loads, and a repo-wide test scans
+every ``*.html`` file) instead of letting it load unnoticed. No check page in this repository uses a closed
+declarative shadow root.
 Nothing here touches the system volume or the output device.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
 INIT_SCRIPT_PATH = HERE / 'silent_init.js'
 MUTE_ARGS = ('--mute-audio',)
-FIREFOX_PREFS = {'media.volume_scale': 0.0}
+
+
+# A closed declarative shadow root (<template shadowrootmode="closed">, quoting and
+# whitespace variants, any case) hides media no page script can reach. The init script
+# cannot pin it, so the page is refused at pre-flight instead of going audible.
+CLOSED_SHADOW_ROOT_RE = re.compile(
+    r"""shadowrootmode\s*=\s*(?:"closed"|'closed'|closed(?=[\s/>]))""", re.IGNORECASE)
+
+
+def assert_no_closed_shadow_roots(html: str, source: str = 'page') -> None:
+    """Refuse a check page whose HTML parses media into a closed declarative shadow root.
+
+    The init script cannot reach inside such a root, so letting the page load would silently
+    violate the silence rule. Raises ``ValueError`` naming the page; open roots pass.
+    """
+    if CLOSED_SHADOW_ROOT_RE.search(html or ''):
+        raise ValueError(
+            f'{source}: closed declarative shadow root (shadowrootmode="closed") — '
+            'media inside it cannot be pinned, refusing the page')
 
 
 def init_script() -> str:
@@ -75,13 +101,12 @@ def silence_browser(browser: Any) -> Any:
 
 
 def silent_launch(engine: Any, **kwargs: Any) -> Any:
-    """``playwright.<engine>.launch(**kwargs)`` with the mute applied at the source."""
+    """``playwright.<engine>.launch(**kwargs)`` with the mute applied at the source.
+
+    Firefox gets no engine pref: Playwright cannot set the float pref ``media.volume_scale``
+    (see the module docstring), so caller ``firefox_user_prefs`` pass through unchanged.
+    """
     kwargs['args'] = silent_args(engine.name, kwargs.get('args'))
-    if engine.name == 'firefox':
-        prefs = dict(kwargs.get('firefox_user_prefs') or {})
-        for key, value in FIREFOX_PREFS.items():
-            prefs.setdefault(key, value)
-        kwargs['firefox_user_prefs'] = prefs
     return silence_browser(engine.launch(**kwargs))
 
 
@@ -89,11 +114,6 @@ def silent_launch_persistent_context(engine: Any, user_data_dir: str, **kwargs: 
     """A persistent context is created with its first page already open, so that page's document is silenced by
     running the init script in it now; every later document and navigation gets it from the context."""
     kwargs['args'] = silent_args(engine.name, kwargs.get('args'))
-    if engine.name == 'firefox':
-        prefs = dict(kwargs.get('firefox_user_prefs') or {})
-        for key, value in FIREFOX_PREFS.items():
-            prefs.setdefault(key, value)
-        kwargs['firefox_user_prefs'] = prefs
     context = silence_context(engine.launch_persistent_context(user_data_dir, **kwargs))
     script = init_script()
     for page in context.pages:

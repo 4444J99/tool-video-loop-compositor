@@ -10,7 +10,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {once} = require('node:events');
-const {silentLaunch} = require('./silent_browser.js');
+const {silentLaunch, assertNoClosedShadowRoots} = require('./silent_browser.js');
 const {observe, samplerGaps, decodeFreezes, pageAliveAcross} = require('./webkit_sampler_diagnostics.js');
 const DURATION_MS = 180000, SAMPLE_MS = 137, MAX_HOLD_MS = 2000;
 // A hosted macOS runner can stall a native decoder for 2 to 3 s once or twice in a 3 minute run and
@@ -1130,6 +1130,12 @@ async function main() {
       .map(name => [name, sha256(path.join(site, name))]));
     receipt.audioSourceSha256 = sha256(path.join(__dirname, 'browser.audio.js'));
     receipt.libraryBuild = 'python3 -m tools.publishing.build_studio_site, checked-out pinned defaults';
+    // simvltanea #124 pre-flight: a closed declarative shadow root would hide media no page script can reach,
+    // so the served check pages are refused here, before any browser launches, instead of going audible.
+    for (const name of ['index.html', 'watch.html', 'lab.html']) {
+      const file = path.join(site, name);
+      if (fs.existsSync(file)) assertNoClosedShadowRoots(fs.readFileSync(file, 'utf8'), file);
+    }
     const {webkit, devices} = require('playwright');
     receipt.playwright = require('playwright/package.json').version;
     assert(receipt.playwright === '1.65.0', 'Expected isolated playwright@1.65.0');

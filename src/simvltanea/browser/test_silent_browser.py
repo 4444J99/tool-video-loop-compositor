@@ -12,10 +12,11 @@ import os
 import tempfile
 import unittest
 import wave
+from pathlib import Path
 
 from simvltanea import subprocess_retry as retry
-from simvltanea.browser.silent_browser import (FIREFOX_PREFS, INIT_SCRIPT_PATH, MUTE_ARGS, init_script, silence_context, silent_args, silent_launch,
-                                               silent_launch_persistent_context)
+from simvltanea.browser.silent_browser import (INIT_SCRIPT_PATH, MUTE_ARGS, assert_no_closed_shadow_roots, init_script,
+                                               silence_context, silent_args, silent_launch, silent_launch_persistent_context)
 from simvltanea.browser.test_browser_compiler import node_executable
 from simvltanea.browser.test_browser_runtime import browser_executable
 
@@ -30,6 +31,9 @@ def silent_wav_uri() -> str:
 
 def page_uri(body: str) -> str:
     html = f'<!doctype html><meta charset="utf-8"><body>{body}</body>'
+    # Pre-flight (simvltanea #124): a closed declarative shadow root would hide media no page script can reach, so
+    # the page is refused here, before any browser launches, instead of going audible.
+    assert_no_closed_shadow_roots(html, 'page_uri fixture')
     return 'data:text/html;base64,' + base64.b64encode(html.encode('utf-8')).decode('ascii')
 
 
@@ -103,21 +107,21 @@ class SilentLaunchContractTests(unittest.TestCase):
         self.assertEqual(silent_args('webkit', ['--x']), ['--x'])
         self.assertEqual(silent_args('firefox'), [])
 
-    def test_firefox_gets_volume_scale_pref_merged_with_callers_prefs(self):
+    def test_firefox_launch_forwards_caller_prefs_and_injects_no_engine_pref(self):
+        # simvltanea #124: Playwright cannot set the float pref media.volume_scale through firefox_user_prefs — a
+        # number breaks every Firefox launch (NS_ERROR_UNEXPECTED from setIntPref; verified live at Playwright
+        # 1.57.0 / Firefox 144.0.2) and a string is ignored by the float getter — so no pref is injected, ever.
         engine = FakeEngine('firefox')
-        silent_launch(engine, headless=True, firefox_user_prefs={'foo': 1})
-        self.assertEqual(engine.launched['firefox_user_prefs'], {'foo': 1, **FIREFOX_PREFS})
-        self.assertTrue(engine.launched['headless'])
-
-    def test_firefox_missing_prefs_still_gets_volume_scale(self):
+        silent_launch(engine, headless=True, firefox_user_prefs={'layout.css.devPixelsPerPx': '2.0'})
+        self.assertEqual(engine.launched['firefox_user_prefs'], {'layout.css.devPixelsPerPx': '2.0'})
+        self.assertNotIn('media.volume_scale', engine.launched.get('firefox_user_prefs', {}))
         engine = FakeEngine('firefox')
         silent_launch(engine, headless=True)
-        self.assertEqual(engine.launched['firefox_user_prefs'], dict(FIREFOX_PREFS))
-
-    def test_firefox_persistent_context_gets_volume_scale_pref(self):
+        self.assertNotIn('firefox_user_prefs', engine.launched)
         engine = FakeEngine('firefox')
-        context = silent_launch_persistent_context(engine, '/profile', args=['--no-sandbox'])
-        self.assertEqual(engine.launched['firefox_user_prefs'], dict(FIREFOX_PREFS))
+        silent_launch_persistent_context(engine, '/profile', firefox_user_prefs={'foo': 1})
+        self.assertEqual(engine.launched['firefox_user_prefs'], {'foo': 1})
+        self.assertNotIn('media.volume_scale', engine.launched['firefox_user_prefs'])
 
     def test_every_context_and_page_gets_the_init_script(self):
         browser = silent_launch(FakeEngine('webkit'))
@@ -155,7 +159,7 @@ class SilentLaunchContractTests(unittest.TestCase):
 
 
 NODE_DRIVER = r"""
-const {silentLaunch, silentLaunchPersistentContext, silentArgs} = require(process.argv[1]);
+const {silentLaunch, silentLaunchPersistentContext, silentArgs, assertNoClosedShadowRoots} = require(process.argv[1]);
 const scripts = [];
 const context = () => { const c = {addInitScript: async options => { scripts.push(options.path); }, closed: false, close: async () => { c.closed = true; }, newPage: async () => ({close: async () => {}}), pages: () => [{evaluate: async () => {}}]}; return c; };
 const engine = name => ({name: () => name, launched: null,
@@ -168,7 +172,30 @@ const engine = name => ({name: () => name, launched: null,
   const webkitBrowser = await silentLaunch(webkit, {headless: true});
   await webkitBrowser.newPage();
   const persistent = engine('chromium'); await silentLaunchPersistentContext(persistent, '/profile', {});
+  // simvltanea #124: the Node twin injects no engine pref either — caller prefs pass through unchanged.
+  const firefox = engine('firefox');
+  await silentLaunch(firefox, {headless: true, firefoxUserPrefs: {'layout.css.devPixelsPerPx': '2.0'}});
+  const firefoxBare = engine('firefox'); await silentLaunch(firefoxBare, {headless: true});
+  const firefoxPersistent = engine('firefox');
+  await silentLaunchPersistentContext(firefoxPersistent, '/profile', {firefoxUserPrefs: {foo: 1}});
+  const closedThrows = [], openPasses = [];
+  for (const html of ['<template shadowrootmode="closed"><audio src="x"></audio></template>',
+    `<template shadowrootmode='closed'><audio src='x'></audio></template>`,
+    '<template shadowrootmode=closed><audio src="x"></audio></template>',
+    '<template  shadowrootmode  =  "closed"  ><audio src="x"></audio></template>',
+    '<TEMPLATE SHADOWROOTMODE="CLOSED"><audio src="x"></audio></TEMPLATE>']) {
+    try { assertNoClosedShadowRoots(html, 'web/fx/index.html'); closedThrows.push(false); }
+    catch (e) { closedThrows.push(String(e).includes('closed declarative shadow root') && String(e).includes('web/fx/index.html')); }
+  }
+  for (const html of ['<template shadowrootmode="open"><audio src="x"></audio></template>',
+    `<template shadowrootmode='open'><audio src='x'></audio></template>`,
+    '<audio src="x"></audio>', '', '<template><audio src="x"></audio></template>']) {
+    try { assertNoClosedShadowRoots(html, 'web/fx/index.html'); openPasses.push(true); }
+    catch (e) { openPasses.push(false); }
+  }
   console.log(JSON.stringify({chromium: chromium.launched, webkit: webkit.launched, persistent: persistent.launched,
+    firefox: firefox.launched, firefoxBare: firefoxBare.launched, firefoxPersistent: firefoxPersistent.launched,
+    closedThrows, openPasses,
     scripts: scripts.length, scriptNames: [...new Set(scripts)], twice: silentArgs('chromium', ['--mute-audio'])}));
 })();
 """
@@ -182,9 +209,86 @@ class NodeHelperTests(unittest.TestCase):
         self.assertEqual(seen['chromium'], {'headless': True, 'args': ['--no-sandbox', '--mute-audio']})
         self.assertEqual(seen['webkit'], {'headless': True, 'args': []})
         self.assertEqual(seen['persistent']['args'], ['--mute-audio'])
-        self.assertEqual(seen['scripts'], 4)
+        # simvltanea #124: the Node twin forwards caller prefs unchanged and injects no engine pref.
+        self.assertEqual(seen['firefox']['firefoxUserPrefs'], {'layout.css.devPixelsPerPx': '2.0'})
+        self.assertNotIn('media.volume_scale', seen['firefox'].get('firefoxUserPrefs', {}))
+        self.assertNotIn('firefoxUserPrefs', seen['firefoxBare'])
+        self.assertEqual(seen['firefoxPersistent']['firefoxUserPrefs'], {'foo': 1})
+        self.assertNotIn('media.volume_scale', seen['firefoxPersistent'].get('firefoxUserPrefs', {}))
+        self.assertEqual(seen['closedThrows'], [True] * 5, 'every closed-root variant is refused, naming the page')
+        self.assertEqual(seen['openPasses'], [True] * 5, 'open roots and plain pages pass')
+        # 5 init scripts: chromium newContext + newPage, webkit newPage, persistent chromium, persistent firefox.
+        self.assertEqual(seen['scripts'], 5)
         self.assertEqual(seen['scriptNames'], [str(INIT_SCRIPT_PATH)])
         self.assertEqual(seen['twice'], ['--mute-audio'])
+
+
+class ClosedShadowRootPreflightTests(unittest.TestCase):
+    """simvltanea #124: a closed declarative shadow root hides media no page script can reach, so the page is
+    refused before any browser launches, naming the page. Open roots keep passing — the init script pins them."""
+
+    CLOSED = ('<template shadowrootmode="closed"><audio src="x"></audio></template>',
+              "<template shadowrootmode='closed'><audio src='x'></audio></template>",
+              '<template shadowrootmode=closed><audio src="x"></audio></template>',
+              '<template  shadowrootmode  =  "closed"  ><audio src="x"></audio></template>',
+              '<TEMPLATE SHADOWROOTMODE="CLOSED"><audio src="x"></audio></TEMPLATE>')
+    OPEN = ('<template shadowrootmode="open"><audio src="x"></audio></template>',
+            "<template shadowrootmode='open'><audio src='x'></audio></template>",
+            '<audio src="x"></audio>', '', '<template><audio src="x"></audio></template>')
+
+    def test_closed_roots_are_refused_naming_the_page(self):
+        for html in self.CLOSED:
+            with self.assertRaisesRegex(ValueError, 'closed declarative shadow root'):
+                assert_no_closed_shadow_roots(html, 'web/fx/index.html')
+            with self.assertRaisesRegex(ValueError, 'web/fx/index.html'):
+                assert_no_closed_shadow_roots(html, 'web/fx/index.html')
+
+    def test_open_roots_and_plain_pages_pass(self):
+        for html in self.OPEN:
+            assert_no_closed_shadow_roots(html, 'web/fx/index.html')
+
+    def test_every_page_the_suite_loads_is_preflighted(self):
+        with self.assertRaisesRegex(ValueError, 'page_uri fixture'):
+            page_uri('<template shadowrootmode="closed"><audio src="x"></audio></template>')
+
+    def test_no_html_page_in_the_repo_uses_a_closed_declarative_shadow_root(self):
+        root = Path(__file__).resolve().parents[3]
+        skipped = {'.git', 'node_modules', '.venv', 'venv', '__pycache__', 'archive', 'var'}
+        pages = [p for p in sorted(root.rglob('*.html'))
+                 if not (set(p.relative_to(root).parts) & skipped)]
+        self.assertGreater(len(pages), 0, 'the scan must actually walk the tree')
+        for page in pages:
+            assert_no_closed_shadow_roots(page.read_text(encoding='utf-8'), str(page.relative_to(root)))
+
+
+class SilentBrowserFirefoxLaunchTests(unittest.TestCase):
+    """simvltanea #124 step 5: a real Firefox launch through the helper must open and load a page. Skipped where
+    Firefox is not installed, like the existing engine-availability skips."""
+
+    @classmethod
+    def setUpClass(cls):
+        from playwright.sync_api import sync_playwright
+        cls.pw = sync_playwright().start()
+        try:
+            cls.browser = silent_launch(cls.pw.firefox, headless=True)
+        except Exception as error:
+            cls.pw.stop()
+            if "Executable doesn't exist" in str(error):
+                raise unittest.SkipTest(f'firefox is not installed here: {str(error).splitlines()[0]}')
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close()
+        cls.pw.stop()
+
+    def test_firefox_launches_through_the_helper_and_loads_the_silent_fixture(self):
+        page = self.browser.new_page()
+        self.addCleanup(page.close)
+        page.goto(page_uri(f'<audio id="a" autoplay loop src="{silent_wav_uri()}"></audio>'))
+        self.assertTrue(page.evaluate('typeof window.__SILENT_BROWSER__ === "object"'))
+        self.assertEqual(page.evaluate('window.__SILENT_BROWSER__.native(document.querySelector("#a"))'),
+                         {'muted': True, 'volume': 0})
 
 
 PAGE = page_uri(f'''

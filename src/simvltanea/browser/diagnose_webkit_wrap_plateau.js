@@ -10,7 +10,7 @@ const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {sample, staticServer, ready, click, proofJournal} = require('./verify_webkit_sustained.js');
 const {libraryClips} = require('./browser.studio.js');
-const {silentLaunch} = require('./silent_browser.js');
+const {silentLaunch, assertNoClosedShadowRoots} = require('./silent_browser.js');
 const BASE = 'f3c724ecd7d4483e11e8d0b623a8e283cf0501a3';
 const BASE_LIVE_SHA = '6b317d6951a9248faabdd8991a94f99174314ae757102e4b5a27e3ed351eb055';
 const MANIFEST_SHA = '030d6446b3a57ea003ec056fdb7ed3e553c10f184b477346822eec5b4f9ca401';
@@ -246,6 +246,12 @@ async function main(argv=process.argv.slice(2)) {
     frameFields:FRAME_FIELDS,rafFields:RAF_FIELDS,startedAt:new Date().toISOString()};
   try{
     const fixtureData=fixture(config.site), parts=['browser.audio.js','browser.presence.js','browser.ecosystem.js','browser.live.js'];
+    // simvltanea #124 pre-flight: a closed declarative shadow root would hide media no page script can reach,
+    // so the served check pages are refused here, before any browser launches, instead of going audible.
+    for (const name of ['index.html', 'watch.html', 'lab.html']) {
+      const file = path.join(config.site, name);
+      if (fs.existsSync(file)) assertNoClosedShadowRoots(fs.readFileSync(file, 'utf8'), file);
+    }
     const bytes=parts.map(n=>fs.readFileSync(path.join(__dirname,n))),candidate=Buffer.concat(bytes.flatMap((b,i)=>i?[Buffer.from('\n'),b]:[b]));
     assert(candidate.equals(fs.readFileSync(path.join(config.site,'runtime.js'))),'Stage differs from exact current source');
     // Python is already pinned by the workflow; urllib also honors the proxy

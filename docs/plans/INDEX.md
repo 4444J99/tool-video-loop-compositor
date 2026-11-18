@@ -35,6 +35,7 @@ evidence; branch, PR and workflow state belong in the current status projection.
 | 2026-11-08 | [parallel-workspace](2026-11-08-parallel-workspace.md) | Parallel Composition Workspace |
 | 2026-11-08 | [persistent-application](2026-11-08-persistent-application.md) | Persistent SIMVLTANEA application |
 | 2026-11-08 | [playable-engineered-iterations](2026-11-08-playable-engineered-iterations.md) | Playable engineered iterations |
+| 2026-11-17 | [pr-issue-evolution](2026-11-17-pr-issue-evolution.md) | PR / Issue Evolution Report — `simvltanea` |
 
 ## Generated output roles
 

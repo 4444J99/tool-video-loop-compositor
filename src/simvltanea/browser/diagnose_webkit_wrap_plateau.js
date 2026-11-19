@@ -8,7 +8,7 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
-const {sample, staticServer, ready, click, proofJournal} = require('./verify_webkit_sustained.js');
+const {sample, staticServer, ready, click, proofJournal, studioPageUrl} = require('./verify_webkit_sustained.js');
 const {libraryClips} = require('./browser.studio.js');
 const {silentLaunch, assertNoClosedShadowRoots} = require('./silent_browser.js');
 const BASE = 'f3c724ecd7d4483e11e8d0b623a8e283cf0501a3';
@@ -24,6 +24,13 @@ const FRAME_FIELDS = ['callbackNow','readWall','registeredSource','currentSource
   'presentedFrames','presentationTime','expectedDisplayTime','processingDuration','currentTime',
   'seeking','paused','readyState','active','resting'];
 const RAF_FIELDS = ['timestamp','readWall','simTime','audioTime'];
+
+// The studio lives at watch.html; the shell landing page (index.html) has no
+// top-level compositionRuntime, so ready() can never pass there. arm() must
+// open the studio page. Navigating to base+query (the shell) was the setup
+// failure behind every SETUP_OR_CAPTURE_FAILED wrap diagnostic: ready() timed
+// out after 60s with zero measurements. Regression test: test_browser_wrap_diagnostic.py::WrapDiagnosticPageUrlTests.
+function diagnosticPageUrl(base, query) { return studioPageUrl(base, query); }
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const assert = (ok, why) => { if (!ok) throw Error(why); };
 const save = (out, name, value) => fs.writeFileSync(path.join(out,name),JSON.stringify(value,null,2)+'\n');
@@ -199,7 +206,7 @@ async function arm(browserType,launchOptions,device,base,out,name,runtimeBytes,q
     browser=await silentLaunch(browserType,launchOptions);const context=await browser.newContext(device),page=await context.newPage();
     page.on('pageerror',e=>result.errors.push(String(e)));
     if(runtimeBytes)await page.route(base+'runtime.js',route=>route.fulfill({contentType:'application/javascript',body:runtimeBytes}));
-    await page.goto(base+query,{waitUntil:'domcontentloaded',timeout:20000});await ready(page);
+    await page.goto(diagnosticPageUrl(base, query),{waitUntil:'domcontentloaded',timeout:20000});await ready(page);
     await click(page,'#speaker');await page.waitForFunction(()=>compositionRuntime.audio.context?.state==='running');
     result.setup=await page.evaluate(alignWraps,TARGETS);
     await page.evaluate(installObservers); // setup seeks precede the complete observer registry
@@ -303,4 +310,4 @@ async function main(argv=process.argv.slice(2)) {
   if(!receipt.completed)process.exitCode=1;
 }
 if(require.main===module)main().catch(error=>{console.error(error);process.exitCode=1;});
-module.exports={options,fixture,analyseFrames,classify,installObservers,TARGETS,BASE_LIVE_SHA,FRAME_FIELDS,RAF_FIELDS};
+module.exports={options,fixture,analyseFrames,classify,installObservers,diagnosticPageUrl,TARGETS,BASE_LIVE_SHA,FRAME_FIELDS,RAF_FIELDS};

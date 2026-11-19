@@ -126,6 +126,29 @@ console.log(JSON.stringify({first,boundedCount:bounded.frames.length/16,
         self.assertEqual(result['dropped'], 4)
         self.assertEqual(result['additionalSources'], 0)
         self.assertEqual(result['stops'], 1)
+class WrapDiagnosticPageUrlTests(unittest.TestCase):
+    """arm() must open the studio page, never the shell landing page.
+
+    The diagnostic was created in ac2a657 (#96) navigating to base+query,
+    i.e. `/` -> index.html (SHELL_HTML, a landing page with an iframe).
+    ready() requires top-level compositionRuntime and
+    SimvltaneaStudio.snapshot(), which never exist on the shell page, so
+    every wrap diagnostic failed setup with a 60s ready() timeout and zero
+    measurements (SETUP_OR_CAPTURE_FAILED, maximumObservedGapMs 0). The
+    studio lives at watch.html; sustained() already navigates there via
+    studioPageUrl. This pins the URL the diagnostic navigates to.
+    """
+
+    def test_diagnostic_page_url_is_the_studio_page(self):
+        result = execute('''
+console.log(JSON.stringify({
+  withQuery: harness.diagnosticPageUrl('http://127.0.0.1:1234/', '?seed=1&mix=s0'),
+  bare: harness.diagnosticPageUrl('http://127.0.0.1:1234', ''),
+}));
+''')
+        self.assertEqual(result['withQuery'],
+                         'http://127.0.0.1:1234/watch.html?seed=1&mix=s0')
+        self.assertEqual(result['bare'], 'http://127.0.0.1:1234/watch.html')
 
 
 if __name__ == '__main__':

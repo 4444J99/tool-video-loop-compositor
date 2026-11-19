@@ -18,3 +18,15 @@ Playwright launch goes through one helper pair and a lint fails when a launch by
 `test_silent_browser.py` proves the contract with silent fixtures, and `test_silent_browser_lint.py` fails on any
 `chromium`, `webkit` or `firefox` launch that skips the helper. The WebKit half of the page test runs in the
 macOS WebKit workflow, where a missing WebKit is a failure.
+
+`test_silent_browser_lint.py` lives under `src/simvltanea/browser/`, so CI's `python3 -m unittest discover -s tests`
+does not collect it and the named-modules step in `ci.yml` does not list it either. It is exercised only when run
+directly:
+
+```
+PYTHONPATH=src python3 -m unittest simvltanea.browser.test_silent_browser_lint -v
+```
+
+That direct run is the check that exercises the pinned string-text and regex-literal behaviour (PR #123). Adding the
+module to the named-modules list in `.github/workflows/ci.yml` is an owner-gated workflow edit (issue #71, item 1);
+until that lands, the direct run is the intended gate and this page is the record of it.

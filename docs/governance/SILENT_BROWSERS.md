@@ -23,7 +23,7 @@ macOS WebKit workflow, where a missing WebKit is a failure.
 does not collect it and the named-modules step in `ci.yml` does not list it either. It is exercised only when run
 directly:
 
-```
+```bash
 PYTHONPATH=src python3 -m unittest simvltanea.browser.test_silent_browser_lint -v
 ```
 

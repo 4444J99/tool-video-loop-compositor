@@ -240,8 +240,20 @@ result.requestFailures = [{wall: 12000, phase: 'sustained', url: retiredUrl, fai
 LATE_RETIREMENT = "for (let index = 87; index < 93; index++) result.samples[index].decks = [standbyDeck()];"
 
 
-def classify(mutation: str = '') -> dict:
-    program = FIXTURE + mutation + '\nprocess.stdout.write(JSON.stringify(analyse(result)));'
+# TVLC #85: the seek cohort pins its targets to fixed slots, so no deck can
+# retire and no successor can be born; the fixture's resident change at
+# sample 500 is removed, leaving four fixed residents for the whole run.
+FIXED_RESIDENTS = r'''
+for (const row of result.samples) for (const node of row.nodes) {
+  node.sha = 'first-' + (Number(node.id.slice(5)) - 1);
+  node.deck = 0; node.birth = 0;
+}
+'''
+
+
+def classify(mutation: str = '', fixed: bool = False) -> dict:
+    options = ', {fixedCohort: true}' if fixed else ''
+    program = FIXTURE + mutation + f'\nprocess.stdout.write(JSON.stringify(analyse(result{options})));'
     completed = retry.run(['node', '-e', program, str(VERIFIER)], check=True,
                                capture_output=True, text=True, timeout=15)
     return json.loads(completed.stdout)
@@ -288,6 +300,30 @@ process.stdout.write(JSON.stringify(urls));
         self.assertGreater(summary['wraps'], 0)
         self.assertEqual(set(summary['changedSlots']), {'loop-1', 'loop-2', 'loop-3', 'loop-4'})
         self.assertEqual(summary['births'], 8)
+
+    def test_fixed_cohort_is_exempt_from_natural_succession_by_design(self):
+        # The recorded seek-cohort-candidate shape at main 049b6c9c: four
+        # fixed residents, no slot ever changes resident. Succession stays
+        # reported false, but the verdict passes: the cohort is fixed by
+        # design, so succession is not applicable to it.
+        summary = classify(FIXED_RESIDENTS, fixed=True)
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(summary['verdict'], 'PASS')
+        self.assertEqual(summary['births'], 4)
+        self.assertEqual(summary['changedSlots'], [])
+        self.assertFalse(summary['checks']['succession'], summary)
+        self.assertEqual(summary['notApplicable'], {
+            'succession': 'Fixed controlled cohort; natural succession is required by the original phases.'})
+
+    def test_natural_succession_still_required_for_ordinary_cohorts(self):
+        # The same fixed residents without the exemption: the strict check
+        # still fails, so the exemption is scoped to fixed cohorts and does
+        # not weaken the original phases.
+        summary = classify(FIXED_RESIDENTS)
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['verdict'], 'FAIL')
+        self.assertFalse(summary['checks']['succession'], summary)
+        self.assertEqual(summary['notApplicable'], {})
 
     def test_proven_prior_blob_retirement_is_reported_without_discarding_raw_errors(self):
         summary = classify(RETIRED_BLOB)

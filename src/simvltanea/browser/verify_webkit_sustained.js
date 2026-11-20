@@ -637,7 +637,17 @@ function progressCoverage(result) {
     stallEpisodes: Math.max(summaryEpisodes, retiredEpisodes + concurrentEpisodes(liveStallWalls)), stallPeakMs: nativePeakMs};
 }
 
-function analyse(result) {
+// A fixed controlled cohort (the seek cohort: six pinned targets, one per
+// role/slot, verify_webkit_seek_cohort.js TARGETS) cannot retire a deck or
+// birth a successor by construction, so natural succession is not a check it
+// can pass or fail — the controlled verdict already treats it as N/A. The
+// raw verdict must say the same thing, or every run logs a FAIL the gate
+// does not mean (runs 44515851514, 44577269665: the candidate fails only on
+// succession, births 4, while seeded/fresh/held-sources prove the runtime
+// does retire decks). The raw succession value is still reported, so the
+// exemption is visible, not hidden.
+function analyse(result, options = {}) {
+  const fixedCohort = options.fixedCohort === true;
   const trackers = new Map(), restTrackers = new Map(), residents = new Map(), births = new Set(), changedSlots = new Set(), holds = [];
   const coverage = progressCoverage(result); let previousWall;
   const expectedSlots = (result.samples[0]?.nodes || []).map(node => node.id).sort().join(',');
@@ -742,9 +752,14 @@ function analyse(result) {
     noErrors: result.errors.length === 0 && result.httpErrors.length === 0 && resourceErrors.unexpected.length === 0 &&
       runtimeFailures.size === 0 && !(result.events || []).some(event => ['media-failure', 'observer-failure'].includes(event.type)),
   };
-  const pass = Object.values(checks).every(Boolean);
-  const verdict = pass ? 'PASS' : Object.entries(checks).some(([key, value]) => key !== 'observationCoverage' && !value) ? 'FAIL' : 'INCONCLUSIVE';
+  // Succession gates the original phases only; a fixed cohort is exempt by
+  // design (see above), so it is excluded from the pass computation there
+  // while its raw value stays in checks for the record.
+  const gating = Object.entries(checks).filter(([key]) => !fixedCohort || key !== 'succession');
+  const pass = gating.every(([, value]) => value);
+  const verdict = pass ? 'PASS' : gating.some(([key, value]) => key !== 'observationCoverage' && !value) ? 'FAIL' : 'INCONCLUSIVE';
   return {pass, verdict, checks, samples: result.samples.length,
+    notApplicable: fixedCohort ? {succession: 'Fixed controlled cohort; natural succession is required by the original phases.'} : {},
     progressCoverage: {schema: result.progressSchema ?? null, issues: coverage.issues, issueCount: coverage.issueCount,
       maxSampleGapMs: coverage.maxSampleGapMs, nativeMaximumGapMs: coverage.maxGapMs},
     stalls: {episodes: stallEpisodes, peakMs: stallPeakMs, tolerated: stallsTolerated && stallEpisodes > 0},
@@ -966,7 +981,10 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
     try { await journalErrors(); } catch (error) { result.failure = String(error.stack || error); }
     try { await journal.close(); } catch (error) { result.failure = String(error.stack || error); }
   }
-  result.summary = analyse(result);
+  // Only a diagnostic with a controlled verdict is a fixed cohort (the seek
+  // cohort); the original phases and the held-source diagnostic keep the
+  // strict succession requirement.
+  result.summary = analyse(result, {fixedCohort: Boolean(diagnostic?.controlledVerdict)});
   if (diagnostic?.controlledVerdict) {
     const coverage = diagnostic.coverage(result, diagnostic.targets);
     coverage.interventions = diagnostic.interventions(result, diagnostic.targets);
